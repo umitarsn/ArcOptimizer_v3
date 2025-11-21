@@ -7,530 +7,356 @@ from sklearn.metrics import mean_absolute_error, r2_score
 from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
+import plotly.express as px
 
 # ------------------------------------------------------------
-# 1. SAYFA AYARLARI ve YARDIMCI FONKSİYONLAR
+# 1. SAYFA AYARLARI
 # ------------------------------------------------------------
 st.set_page_config(
-    page_title="BG-ArcOptimizer v2",
+    page_title="BG-ArcOptimizer Enterprise",
     layout="wide",
-    page_icon="⚡",
-    initial_sidebar_state="expanded" 
+    page_icon="🏭",
+    initial_sidebar_state="expanded"
 )
 
-def feature_engineering(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Termal Stres ve Hurda Kalite İndeksini hesaplar, 
-    ML modelinin kullanacağı yeni feature'ları oluşturur.
-    """
-    df = df.copy()
+# ------------------------------------------------------------
+# 2. YARDIMCI FONKSİYONLAR & VERİ HAZIRLIĞI
+# ------------------------------------------------------------
+
+@st.cache_data
+def generate_dummy_trend_data(n_points=50):
+    """Trend grafikleri için sahte zaman serisi verisi üretir."""
+    dates = pd.date_range(start="2023-01-01", periods=n_points, freq="D")
     
-    # --- 1. Termal Stres İndeksi (Modül 1 & 4) - Yüksek değerler Manyetik Dengesizlik Riskini Temsil Eder ---
+    # Panel Sıcaklık Trendi (Modül 1 için)
+    panel_temps = np.random.normal(35, 5, n_points) + np.linspace(0, 10, n_points) # Artan trend (aşınma simülasyonu)
+    
+    # Maliyet Trendi (Modül 5 için)
+    costs = np.random.normal(450, 20, n_points)
+    
+    return pd.DataFrame({
+        "Tarih": dates,
+        "Panel_Temp_Avg": panel_temps,
+        "Cost_Per_Ton": costs
+    })
+
+def feature_engineering(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
     required_thermal_cols = ["panel_T_in_C", "panel_T_out_C", "panel_flow_kg_s", "power_kWh"]
     if all(col in df.columns for col in required_thermal_cols):
         cp_kJ = 4.18  
         df['Q_Panel_kW'] = df['panel_flow_kg_s'] * (df['panel_T_out_C'] - df['panel_T_in_C']) * cp_kJ 
-        
-        # Termal Stres Simülasyonu: Yüksek Q_Panel ve Güç, termal stresi artırır. 
-        # (Bu, DC manyetik alanının neden olduğu refrakter aşınmasının sonuçlarını simüle edebilir)
         df['Thermal_Stress_Index'] = (df['Q_Panel_kW'] * 0.1) + (df['power_kWh'] * 0.005) 
-        
-        # 0-100 aralığına normalize et
         max_val = df['Thermal_Stress_Index'].max()
-        if max_val > 0:
-            df['Thermal_Stress_Index'] = (df['Thermal_Stress_Index'] / max_val) * 100
-        else:
-             df['Thermal_Stress_Index'] = 50.0 
-        
+        df['Thermal_Stress_Index'] = (df['Thermal_Stress_Index'] / max_val * 100) if max_val > 0 else 50.0
         df = df.drop(columns=['Q_Panel_kW'])
 
-    # --- 2. Hurda Kalite İndeksi (Modül 2) ---
     required_scrap_cols = ["scrap_HMS80_20_pct", "scrap_HBI_pct", "scrap_Shredded_pct"]
     if all(col in df.columns for col in required_scrap_cols):
-        # Varsayım: HBI yüksek (1.0), Shredded orta (0.7), HMS düşük (0.4) kalite katsayısı
         df['Scrap_Quality_Index'] = (
             df['scrap_HBI_pct'] * 1.0 + 
             df['scrap_Shredded_pct'] * 0.7 + 
             df['scrap_HMS80_20_pct'] * 0.4
         )
-        # Hesaplanan değeri 0-100 arasında tutarız.
-        
-        # Orijinal hurda yüzdesi kolonlarını modelden kaldırıp, sadece indeksi kullanıyoruz
         df = df.drop(columns=required_scrap_cols, errors='ignore') 
-        
-    return df
+    
+    return df.rename(columns={'Thermal_Imbalance_Index': 'Thermal_Stress_Index'})
 
-def create_gauge_chart(value, target=1620, min_range=1500, max_range=1750):
-    """Sıcaklık için ibreli gösterge (Gauge) oluşturur (Modül 3/4)."""
+def create_gauge_chart(value, title="Sıcaklık", min_v=1500, max_v=1750, target=1620):
     fig = go.Figure(go.Indicator(
         mode = "gauge+number+delta",
         value = value,
-        domain = {'x': [0, 1], 'y': [0, 1]},
-        title = {'text': "Tahmini Döküm Sıcaklığı (°C)", 'font': {'size': 20}},
+        title = {'text': title},
         delta = {'reference': target, 'increasing': {'color': "red"}, 'decreasing': {'color': "green"}},
         gauge = {
-            'axis': {'range': [min_range, max_range], 'tickwidth': 1, 'tickcolor': "darkblue"},
+            'axis': {'range': [min_v, max_v], 'tickwidth': 1, 'tickcolor': "darkblue"},
             'bar': {'color': "black"},
-            'bgcolor': "white",
-            'borderwidth': 2,
-            'bordercolor': "gray",
             'steps': [
-                {'range': [min_range, 1600], 'color': '#4dabf5'},
+                {'range': [min_v, 1600], 'color': '#4dabf5'},
                 {'range': [1600, 1640], 'color': '#66ff66'},
-                {'range': [1640, max_range], 'color': '#ff6666'}],
-            'threshold': {
-                'line': {'color': "red", 'width': 4},
-                'thickness': 0.75,
-                'value': 1700}}))
-    fig.update_layout(height=300, margin=dict(l=20, r=20, t=30, b=20))
+                {'range': [1640, max_v], 'color': '#ff6666'}],
+            'threshold': {'line': {'color': "red", 'width': 4}, 'thickness': 0.75, 'value': 1700}}))
+    fig.update_layout(height=250, margin=dict(l=20, r=20, t=30, b=20))
     return fig
 
-def generate_cfd_fields(power, magnetic_deviation_factor):
-    """
-    Arc Ocağı Taban Sıcaklık Alanını Simüle Eder (DC Ark Akımının Manyetik Sapma Etkisi).
-    DC akımının yarattığı elektromanyetik dengesizlik, sıvı metal havuzunun ısı merkezini kaydırır.
-    """
+def generate_cfd_fields(power):
     nx, ny = 50, 50
-    x = np.linspace(0, 10, nx)
-    y = np.linspace(0, 10, ny)
+    x = np.linspace(0, 10, nx); y = np.linspace(0, 10, ny)
     X, Y = np.meshgrid(x, y)
-    
-    # 1. Ark Merkezini Sapma Faktörüne Göre Kaydırma (Manyetik Etki)
-    # 5.0, 5.0 fırının merkezi
-    # Sapma Faktörü, 0 (Merkez) ile 3 (Maksimum Köşe Kayması) arasında bir değer alır.
-    deviation_amount = magnetic_deviation_factor * 0.8
-    center_x = 5.0 + deviation_amount * np.cos(np.pi/4) 
-    center_y = 5.0 + deviation_amount * np.sin(np.pi/4)
+    center_x, center_y = 5.0, 5.0
     dist_sq = (X - center_x)**2 + (Y - center_y)**2
-    
-    # 2. Dağılım Sabiti (Havuz Hacmi): Güç arttıkça ark daha yaygınlaşır (daha geniş sıvı havuzu).
     diffusion_factor = 10.0 + (power / 500.0) 
-    
-    # 3. Ark Bölgesi Tepe Sıcaklığı (Güçle orantılı)
     max_arc_temp = 1600 + (power * 0.05) 
-    
-    # Gauss dağılımı kullanarak sıcaklık alanı oluşturma
     temp_field = max_arc_temp * np.exp(-dist_sq / diffusion_factor)
-    # En düşük sıcaklık 1500 C'nin altına düşmesin
-    temp_field = np.maximum(temp_field, 1500)
-    
-    return X, Y, temp_field
+    return X, Y, np.maximum(temp_field, 1500)
 
 # ------------------------------------------------------------
-# 2. ANA UYGULAMA AKIŞI
+# 3. ANA UYGULAMA
 # ------------------------------------------------------------
 def main():
-    st.title("⚡ DC Ark Ocağı - Akıllı Karar Destek Paneli")
+    # --- SOL MENÜ NAVİGASYON ---
+    st.sidebar.title("📑 Modül Seçimi")
     
-    # --- VERİ YÜKLEME SEÇENEĞİ ---
-    st.sidebar.header("📂 Veri Kaynağı")
-    data_mode = st.sidebar.radio(
-        "Çalışma Modu Seçiniz:",
-        options=("Demo Verileri (Otomatik)", "Kendi Dosyamı Yükle (CSV)"),
-        index=0 
+    selected_module = st.sidebar.radio(
+        "Görüntülemek istediğiniz modülü seçin:",
+        [
+            "1️⃣ AI Bakım ve Duruş Engelleme",
+            "2️⃣ AI Girdi Maliyetleri Düşürme",
+            "3️⃣ Karar Destek Modülü (Process)",
+            "4️⃣ Alarm, Tavsiye ve KPI'lar",
+            "5️⃣ AI Enterprise Level (EBITDA)"
+        ]
     )
+    
+    st.sidebar.markdown("---")
+    st.sidebar.info(f"Şu an aktif modül: **{selected_module}**")
 
-    df = None
-    
-    if data_mode == "Demo Verileri (Otomatik)":
-        try:
-            # NOT: Bu path'in projenizin kök dizinine göre doğru olduğundan emin olun
-            df = pd.read_csv("data/BG_EAF_panelcooling_demo.csv") 
-            st.info(f"ℹ️ **Demo Modu:** {len(df)} satırlık simülasyon verisi kullanılıyor.")
-        except FileNotFoundError:
-            st.error("⚠️ Demo veri dosyası bulunamadı. Lütfen kontrol edin.")
-            st.stop()
-            
-    else:
-        uploaded_file = st.sidebar.file_uploader("CSV Dosyanızı Sürükleyin", type=["csv"])
-        if uploaded_file:
-            df = pd.read_csv(uploaded_file)
-            st.success(f"✅ Dosya Yüklendi: {len(df)} satır.")
-        else:
-            st.warning("👈 Lütfen sol menüden bir CSV dosyası yükleyin veya Demo moduna geçin.")
-            st.stop()
-
-    # --- VERİ ÖN İŞLEME ve FEATURE ENGINEERING ---
-    df = feature_engineering(df) 
-    
-    # --- MODEL EĞİTİMİ ---
-    target_col = "tap_temperature_C"
-    
-    if target_col not in df.columns:
-        st.error(f"Hata: CSV dosyasında '{target_col}' sütunu bulunamadı.")
+    # --- VERİ YÜKLEME ---
+    # Demo veri yükleme (Arka planda)
+    try:
+        df = pd.read_csv("data/BG_EAF_panelcooling_demo.csv")
+    except:
+        st.error("Demo veri dosyası bulunamadı! Lütfen data klasörünü kontrol edin.")
         st.stop()
 
-    drop_cols = ["heat_id", "tap_temperature_C", "melt_temperature_C", 
-                 "panel_T_in_C", "panel_T_out_C", "panel_flow_kg_s"]
+    df = feature_engineering(df)
     
+    # Model Eğitimi (Her sayfada ihtiyaç duyulabilir)
+    target_col = "tap_temperature_C"
+    drop_cols = ["heat_id", "tap_temperature_C", "melt_temperature_C", "panel_T_in_C", "panel_T_out_C", "panel_flow_kg_s"]
     X = df.drop(columns=[c for c in drop_cols if c in df.columns] + [target_col], errors='ignore')
     y = df[target_col]
+    
+    model = RandomForestRegressor(n_estimators=50, random_state=42)
+    model.fit(X, y)
+    
+    # Trend verisi
+    trend_df = generate_dummy_trend_data()
 
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    # ------------------------------------------------------------------
+    # ORTAK GİRDİLER (SIDEBAR - Her zaman görünür olsun veya modüle özel)
+    # ------------------------------------------------------------------
+    st.sidebar.markdown("### 🎛️ Aktif Simülasyon Girdileri")
     
-    model = RandomForestRegressor(n_estimators=100, random_state=42)
-    model.fit(X_train, y_train)
-    
-    # Başarım Metrikleri
-    y_pred = model.predict(X_test)
-    mae = mean_absolute_error(y_test, y_pred)
-    r2 = r2_score(y_test, y_pred)
-
-    # --------------------------------------------------------------------------------
-    # 3. KULLANICI GİRDİLERİ (SİMÜLASYON) - Sidebar (Tüm Modüllerin Girdisi)
-    # --------------------------------------------------------------------------------
-    
-    st.sidebar.markdown("---")
-    st.sidebar.header("🎛️ Proses Simülasyon Parametreleri (Tüm Modüller İçin)")
-    
-    default_tonnage = 10.0 
-    tonnage = st.sidebar.number_input(
-        "Tahmini Ergitme Tonajı (ton)", 
-        min_value=1.0, 
-        max_value=100.0, 
-        value=default_tonnage, 
-        step=1.0
-    )
-    
-    # --- Hurda Kalite Girişi ---
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("♻️ Modül 2: Hurda Kalite Girdisi")
-    quality_input_mode = st.sidebar.radio(
-        "Kalite Girdi Şekli:",
-        options=("⭐ Toplu Kalite İndeksi Gir", "📊 Hurda Karışımını Gir (Hesapla)"),
-        index=0
-    )
-    
+    # Bu girdiler model tahmini için tüm modüllerde gerekli
     input_data = {}
     
-    if quality_input_mode == "⭐ Toplu Kalite İndeksi Gir":
-        input_data['Scrap_Quality_Index'] = st.sidebar.slider(
-            "Hurda Kalite İndeksi (0-100)", 
-            0.0, 100.0, 70.0, 0.1
-        )
+    # Modül 2 ve 5 için Fiyat Girdileri
+    if selected_module in ["2️⃣ AI Girdi Maliyetleri Düşürme", "5️⃣ AI Enterprise Level (EBITDA)"]:
+        st.sidebar.subheader("💰 Piyasa Fiyatları")
+        price_scrap = st.sidebar.number_input("Hurda ($/ton)", 200., 600., 400.)
+        price_elec = st.sidebar.number_input("Elektrik ($/kWh)", 0.05, 0.3, 0.10)
+        price_oxy = st.sidebar.number_input("Oksijen ($/Nm3)", 0.05, 0.5, 0.15)
+        price_electrode = st.sidebar.number_input("Elektrot ($/kg)", 2.0, 8.0, 4.5)
     else:
-        # Hesaplama mantığı
-        pct_hbi = st.sidebar.slider("HBI Yüzdesi (%)", 0.0, 100.0, 10.0, 0.1)
-        pct_shredded = st.sidebar.slider("Shredded Yüzdesi (%)", 0.0, 100.0, 40.0, 0.1)
-        pct_hms = st.sidebar.slider("HMS Yüzdesi (%)", 0.0, 100.0, 50.0, 0.1)
-        
-        qual_hbi = 1.0; qual_shredded = 0.7; qual_hms = 0.4 
-        raw_index = (pct_hbi * qual_hbi) + (pct_shredded * qual_shredded) + (pct_hms * qual_hms)
-        
-        input_data['Scrap_Quality_Index'] = min(raw_index, 100.0)
-        st.sidebar.metric("Hesaplanan Kalite İndeksi", f"{input_data['Scrap_Quality_Index']:.1f}")
-        
-    st.sidebar.markdown("---")
-    
-    # --- Kalan Proses Parametre Girdileri ---
+        # Varsayılan değerler
+        price_scrap=400; price_elec=0.10; price_oxy=0.15; price_electrode=4.5
+
+    # Proses Girdileri (Sliderlar)
     for col in X.columns:
-        if col not in input_data:
-            min_v = float(df[col].min())
-            max_v = float(df[col].max())
-            mean_v = float(df[col].mean())
-            
-            if col == 'power_kWh':
-                input_data[col] = st.sidebar.slider("Güç (power_kWh)", min_v, max_v, mean_v)
-            elif col == 'oxygen_Nm3':
-                input_data[col] = st.sidebar.slider("Oksijen (oxygen_Nm3)", min_v, max_v, mean_v)
-            elif col == 'tap_time_min':
-                input_data[col] = st.sidebar.slider("Döküm Süresi (tap_time_min)", min_v, max_v, mean_v)
-            elif col == 'Thermal_Stress_Index': 
-                # Modül 1'in ana girdisi
-                input_data[col] = st.sidebar.slider("🔥 Modül 1: Panel Termal Stres İndeksi (0-100)", 0.0, 100.0, float(df['Thermal_Stress_Index'].median()))
-            else:
-                input_data[col] = st.sidebar.slider(f"{col}", min_v, max_v, mean_v)
-            
-    # Maliyet Girdileri (Modül 2)
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("💰 Modül 2: Anlık Birim Fiyatlar ($)")
-    
-    price_scrap_ton = st.sidebar.number_input("Hurda ($/ton)", 100.0, 800.0, 450.0, step=10.0)
-    price_electrode = st.sidebar.number_input("Elektrot ($/kg)", 1.0, 10.0, 4.5, step=0.1)
-    electrode_rate = st.sidebar.number_input("Elektrot Sarfiyatı (kg/ton)", 0.5, 5.0, 1.8, step=0.1)
-    
-    price_elec = st.sidebar.number_input("Elektrik ($/kWh)", 0.01, 0.50, 0.10, step=0.01)
-    price_oxy = st.sidebar.number_input("Oksijen ($/Nm³)", 0.01, 1.00, 0.15, step=0.01)
-    
-    # --------------------------------------------------------------------------------
-    # 4. KURUMSAL (ENTERPRISE) GİRDİLERİ - Sidebar (Modül 5)
-    # --------------------------------------------------------------------------------
-    st.sidebar.markdown("---")
-    st.sidebar.header("🏢 Modül 5: Kurumsal Girdiler")
-    
-    sales_price_ton = st.sidebar.number_input("Hedef Satış Fiyatı ($/ton)", 500.0, 3000.0, 1500.0, step=10.0)
-    monthly_tonnage_target = st.sidebar.number_input("Aylık Üretim Hedefi (ton)", 100.0, 20000.0, 10000.0, step=100.0)
-    forecast_elec_price = st.sidebar.number_input("Tahmini Gelecek Elektrik Fiyatı ($/kWh)", 0.05, 0.30, 0.12, 0.01)
-    global_demand_index = st.sidebar.slider("Global Talep İndeksi (0=Düşük, 10=Yüksek)", 0.0, 10.0, 7.5, 0.1)
-    
-    price_labor_monthly = st.sidebar.number_input("Personel/İşçilik Gideri (Aylık $)", 10000.0, 5000000.0, 500000.0, step=10000.0)
-    price_sg_a_monthly = st.sidebar.number_input("Genel Yönetim/SG&A (Aylık $)", 10000.0, 2000000.0, 250000.0, step=5000.0)
-    
-    # --- TAHMİN VE ANALİZ (Tüm Modüller İçin Ortak Hesaplama) ---
-    
+        if col == 'power_kWh':
+            input_data[col] = st.sidebar.slider("Güç (kWh)", 3000.0, 5000.0, 4000.0)
+        elif col == 'oxygen_Nm3':
+            input_data[col] = st.sidebar.slider("Oksijen (Nm3)", 100.0, 300.0, 200.0)
+        elif col == 'Thermal_Stress_Index':
+            input_data[col] = st.sidebar.slider("Termal Stres İndeksi (0-100)", 0.0, 100.0, 50.0)
+        elif col == 'Scrap_Quality_Index':
+            input_data[col] = st.sidebar.slider("Hurda Kalitesi (0-100)", 0.0, 100.0, 70.0)
+        elif col == 'tap_time_min':
+            input_data[col] = st.sidebar.slider("Süre (dk)", 40.0, 70.0, 55.0)
+        else:
+            input_data[col] = df[col].mean()
+
+    # TAHMİN YAP
     input_df = pd.DataFrame([input_data])[X.columns]
     prediction = model.predict(input_df)[0]
     
-    # Proses Maliyeti Hesaplaması (Modül 2)
-    pwr = input_data.get('power_kWh', 0)
-    oxy = input_data.get('oxygen_Nm3', 0)
-    
-    cost_scrap = tonnage * price_scrap_ton 
-    cost_e = pwr * price_elec
-    cost_o = oxy * price_oxy
-    cost_el = tonnage * electrode_rate * price_electrode 
-    
-    total_variable_cost_per_heat = cost_scrap + cost_e + cost_o + cost_el 
-    
-    cost_per_ton = total_variable_cost_per_heat / tonnage
-    kwh_per_ton = pwr / tonnage
-    
-    # Aylık Finansal Hesaplamalar (Modül 5)
-    total_sales_revenue = sales_price_ton * monthly_tonnage_target
-    total_variable_cost_per_month = cost_per_ton * monthly_tonnage_target
-    total_fixed_cost_per_month = price_labor_monthly + price_sg_a_monthly
-    total_operating_cost = total_variable_cost_per_month + total_fixed_cost_per_month 
-    ebitda = total_sales_revenue - total_operating_cost
-    
+    # Tonaj (Sabit varsayım veya girdi)
+    tonnage = 10.0 # 10 tonluk ocak
 
-    # --- TABLAR (5 MODÜL) ---
-    tab_m3_main, tab_m4_assist, tab_m2_cost, tab_m1_cfd, tab_m5_ebitda = st.tabs([
-        "3️⃣ Proses Optimizasyonu (Sıcaklık Tahmini)", 
-        "4️⃣ Operatör Asistanı & Açıklama",
-        "2️⃣ Hurda & Maliyet Optimizasyonu",
-        "1️⃣ Panel, Refrakter & CFD Sim.",
-        "5️⃣ AI Enterprise Level (EBITDA)"
-    ])
-
-
-    # --- MODÜL 3: PROSES OPTİMİZASYONU (SICAKLIK) ---
-    with tab_m3_main:
-        st.header("3️⃣ Proses Optimizasyonu: Sıcaklık Tahmini ve Performans")
-        st.info("Bu modül, girdiğiniz anlık proses parametrelerine dayanarak döküm sıcaklığını tahmin eder ve prosesi optimize etmeniz için merkezi metrikleri sunar.")
+    # ------------------------------------------------------------------
+    # MODÜL 1: AI BAKIM VE DURUŞ ENGELLEME
+    # ------------------------------------------------------------------
+    if selected_module == "1️⃣ AI Bakım ve Duruş Engelleme":
+        st.title("🛡️ Modül 1: AI Bakım ve Duruş Engelleme")
+        st.markdown("Fırın refrakter sağlığı, panel soğutma performansı ve ekipman anormalliklerinin takibi.")
         
-        with st.expander("📈 Model Doğruluk Oranlarını Göster"):
-            c1, c2 = st.columns(2)
-            c1.metric("Hata Payı (MAE)", f"±{mae:.1f} °C")
-            c2.metric("Model Güveni (R²)", f"%{r2*100:.1f}")
-
-        st.markdown("---")
-
-        col_gauge, col_performance = st.columns([2, 2])
+        col1, col2 = st.columns([2, 1])
         
-        with col_gauge:
-            st.subheader("Hedef Sıcaklık Durumu")
+        with col1:
+            st.subheader("Panel Sıcaklık Trendi (Refrakter Aşınma Göstergesi)")
+            # Plotly Line Chart
+            fig_trend = px.line(trend_df, x="Tarih", y="Panel_Temp_Avg", title="Panel Çıkış Suyu Sıcaklığı (Günlük Ort.)")
+            fig_trend.add_hline(y=45, line_dash="dot", annotation_text="Risk Limiti", line_color="red")
+            st.plotly_chart(fig_trend, use_container_width=True)
+            
+        with col2:
+            st.subheader("Anlık Sağlık Skorları")
+            stress_val = input_data['Thermal_Stress_Index']
+            
+            # Sağlık Gauge
+            fig_health = go.Figure(go.Indicator(
+                mode = "gauge+number", value = 100 - stress_val,
+                title = {'text': "Panel Sağlık Skoru"},
+                gauge = {'axis': {'range': [0, 100]}, 'bar': {'color': "green" if stress_val < 50 else "red"}}
+            ))
+            fig_health.update_layout(height=250)
+            st.plotly_chart(fig_health, use_container_width=True)
+            
+            if stress_val > 70:
+                st.error("⚠️ DİKKAT: Yüksek Termal Stres! Panel delinme riski.")
+                st.info("👉 Öneri: Soğutma suyu debisini %10 artırın.")
+            else:
+                st.success("✅ Sistem Normal: Bakım ihtiyacı öngörülmüyor.")
+
+    # ------------------------------------------------------------------
+    # MODÜL 2: AI GİRDİ MALİYETLERİ DÜŞÜRME
+    # ------------------------------------------------------------------
+    elif selected_module == "2️⃣ AI Girdi Maliyetleri Düşürme":
+        st.title("💰 Modül 2: AI Girdi Maliyetleri Optimizasyonu")
+        st.markdown("Hurda reçetesi ve enerji birim maliyetlerinin detaylı analizi.")
+        
+        # Maliyet Hesabı
+        c_scrap = tonnage * price_scrap
+        c_elec = input_data['power_kWh'] * price_elec
+        c_oxy = input_data['oxygen_Nm3'] * price_oxy
+        c_elec_rod = tonnage * 1.8 * price_electrode # 1.8 kg/ton varsayım
+        total = c_scrap + c_elec + c_oxy + c_elec_rod
+        
+        c1, c2 = st.columns(2)
+        
+        with c1:
+            st.subheader("Maliyet Dağılımı")
+            cost_data = pd.DataFrame({
+                "Kalem": ["Hurda", "Elektrik", "Oksijen", "Elektrot"],
+                "Tutar": [c_scrap, c_elec, c_oxy, c_elec_rod]
+            })
+            fig_pie = px.pie(cost_data, values='Tutar', names='Kalem', title='Döküm Başına Maliyet Kırılımı', hole=0.4)
+            st.plotly_chart(fig_pie, use_container_width=True)
+            
+        with c2:
+            st.subheader("Birim Maliyet Analizi ($/ton)")
+            unit_cost = total / tonnage
+            st.metric("Mevcut Birim Maliyet", f"${unit_cost:.2f} / ton")
+            st.metric("Hedef Birim Maliyet", "$450.00 / ton", delta=f"${unit_cost-450:.2f}")
+            
+            st.markdown("### 💡 Tasarruf Önerisi")
+            if input_data['power_kWh'] > 4200:
+                st.warning("Enerji tüketimi yüksek. Oksijen miktarını artırarak elektrikten tasarruf edebilirsiniz.")
+            else:
+                st.success("Enerji tüketimi optimum seviyede.")
+
+    # ------------------------------------------------------------------
+    # MODÜL 3: KARAR DESTEK MODÜLÜ
+    # ------------------------------------------------------------------
+    elif selected_module == "3️⃣ Karar Destek Modülü (Process)":
+        st.title("🎯 Modül 3: Karar Destek ve Dijital İkiz")
+        
+        col_main, col_cfd = st.columns([1, 2])
+        
+        with col_main:
+            st.subheader("Sıcaklık Tahmini")
             st.plotly_chart(create_gauge_chart(prediction), use_container_width=True)
-        
-        with col_performance:
-            st.subheader("Temel Performans Metrikleri")
-            target_kwh_per_ton = 400.0 
             
-            st.metric(
-                label="Tahmini Döküm Sıcaklığı (°C)", 
-                value=f"{prediction:.1f} °C"
-            )
-            st.metric(
-                label="Birim Enerji Tüketimi (kWh/ton)", 
-                value=f"{kwh_per_ton:.1f} kWh",
-                delta=f"{(kwh_per_ton - target_kwh_per_ton):.1f} kWh (Hedef: {target_kwh_per_ton} kWh)"
-            )
-            st.metric(
-                label="Tahmini Proses Süresi (min)", 
-                value=f"{input_data.get('tap_time_min', 50.0):.1f} dk"
-            )
-
-
-    # --- MODÜL 4: OPERATÖR ASİSTANI & AÇIKLAMA ---
-    with tab_m4_assist:
-        st.header("4️⃣ Operatör Asistanı ve Tahmin Açıklaması")
-        st.info("Bu modül, tahmin edilen sıcaklık ve fırın durumu baz alınarak anlık operasyonel tavsiyeler üretir ve modelin kararını açıklar.")
-
-        col_advice, col_feat = st.columns(2)
-        
-        thermal_index = input_data.get('Thermal_Stress_Index', 50.0) 
-        quality_index = input_data.get('Scrap_Quality_Index', 70.0) 
-
-        with col_advice:
-            st.subheader("🤖 Operatör Asistanı - Anlık Tavsiyeler")
+            st.info(f"Girdiğiniz parametrelerle beklenen döküm sıcaklığı: **{prediction:.1f} °C**")
             
-            # Ana Sıcaklık Tavsiyesi
-            if prediction < 1600:
-                st.error(f"⚠️ **Düşük Sıcaklık ({prediction:.1f}°C)**: Enerji girişini artırın.")
-                advice_temp = "Enerjiyi artırın."
-            elif 1600 <= prediction <= 1640:
-                st.success(f"✅ **İdeal Döküm Aralığı ({prediction:.1f}°C)**: Mevcut parametreler optimum.")
-                advice_temp = "Müdahale gerekmez."
-            else:
-                st.warning(f"🔥 **Aşırı Isınma ({prediction:.1f}°C)**: Enerji israfını önlemek için gücü azaltın.")
-                advice_temp = "Gücü azaltın."
-
-            # Termal Stres Tavsiyesi (Modül 1 & 4) - Manyetik Denge/Stres Tavsiyesi
-            if thermal_index > 75:
-                st.error(f"🚨 **Yüksek Termal Stres/Manyetik Dengesizlik RİSKİ ({thermal_index:.1f} İndeks)**")
-                advice_thermal = "DC akım kontrolü ve panel soğutma sistemi/refrakter kontrolü. **Bakım Uyarısı!**" 
-            elif thermal_index > 55:
-                st.warning(f"🔔 **Termal Stres/Dengesizlik UYARISI ({thermal_index:.1f} İndeks)**")
-                advice_thermal = "DC akımını ayarlayarak manyetik dengeyi sağlamaya çalışın veya soğutma debisi kontrol edin."
-            else:
-                st.info(f"✨ Termal Denge Stabil ({thermal_index:.1f} İndeks)")
-                advice_thermal = "Denge stabil."
-                
-            # Kalite Tavsiyesi (Modül 2 & 4)
-            if quality_index < 40:
-                st.warning(f"📉 **Düşük Kalite ({quality_index:.1f} İndeks)**")
-                advice_quality = "Ergitme süresi uzayabilir, oksijen/güç artırımı gerekebilir."
-            else:
-                advice_quality = "Kalite yeterli."
-
-
-            st.markdown("---")
-            st.write(f"**Özet Tavsiye:** Sıcaklık: *{advice_temp}* | Stres/Denge: *{advice_thermal}* | Kalite: *{advice_quality}*")
-            
-        with col_feat:
-            st.subheader("🔍 Model Karar Açıklaması")
-            
-            importances = pd.DataFrame({
-                'Faktör': X.columns,
-                'Etki': model.feature_importances_
-            }).sort_values(by='Etki', ascending=False)
-            
-            st.bar_chart(importances.set_index('Faktör'), color="#0056b3")
-            st.caption("Modelin sıcaklık tahmininde en çok dikkate aldığı parametreler.")
-            st.write(f"**Çıkarım:** En önemli faktör **{importances.iloc[0]['Faktör']}**'dir.")
-
-
-    # --- MODÜL 2: HURDA & MALİYET OPTİMİZASYONU ---
-    with tab_m2_cost:
-        st.header("2️⃣ Hurda ve Maliyet Optimizasyonu")
-        st.info("Bu modül, hurda kalitesi ve sarf malzemesi fiyatlarına dayanarak bir ergitmenin (heat) toplam değişken maliyetini analiz eder.")
-        
-        col_cost, col_qual = st.columns(2)
-
-        with col_cost:
-            st.subheader("💵 Değişken Maliyet Analizi (Tek Ergitme)")
-            
-            st.dataframe(pd.DataFrame({
-                "Kalem": ["Hurda ($)", "Elektrik ($)", "Oksijen ($)", "Elektrot ($)", "TOPLAM DEĞİŞKEN MALİYET ($)"],
-                "Değer": [f"{cost_scrap:.2f}", f"{cost_e:.2f}", f"{cost_o:.2f}", f"{cost_el:.2f}", f"{total_variable_cost_per_heat:.2f}"]
-            }), hide_index=True, use_container_width=True)
-            
-            st.markdown("---")
-            target_cost_per_ton = 100.0 
-            
-            st.metric(
-                label="Toplam Birim Maliyet ($/ton)", 
-                value=f"{cost_per_ton:.2f} $",
-                delta=f"{(cost_per_ton - target_cost_per_ton):.2f} $ (Hedef: {target_cost_per_ton} $)"
-            )
-            
-        with col_qual:
-            st.subheader("♻️ Hurda Kalite Etkisi")
-            
-            st.metric(
-                label="Hurda Kalite İndeksi (0-100)",
-                value=f"{quality_index:.1f}",
-                delta="Yüksek indeks, daha verimli ergitme potansiyeli demektir."
-            )
-            st.write(f"**Hurda Kalite İndeksi Detayları:**")
-            st.markdown(f"- Hurda (Scrap) Kalite İndeksi şu anda **{quality_index:.1f}** olarak simüle edilmektedir.")
-            st.markdown("- Yüksek kaliteli (HBI gibi) hurda kullanımı, ergitme süresini kısaltarak ve kimyasal reaksiyonları hızlandırarak enerji maliyetlerini dolaylı olarak düşürür.")
-            
-            if quality_index < 40:
-                st.warning("Düşük hurda kalitesi, daha fazla enerji ve oksijen gereksinimi yaratabilir.")
-
-
-    # --- MODÜL 1: PANEL, REFRAKTER & CFD SİM. ---
-    with tab_m1_cfd:
-        st.header("1️⃣ Panel, Refrakter Yönetimi ve CFD Simülasyonu (Dijital İkiz)")
-        
-        col_m1_index, col_m1_cfd = st.columns([1, 3])
-        
-        with col_m1_index:
-            st.subheader("🔥 Panel Stres & Denge Durumu")
-            
-            thermal_index_for_cfd = input_data.get('Thermal_Stress_Index', 50.0) 
-            st.metric(
-                label="Panel Termal Stres İndeksi (0-100)",
-                value=f"{thermal_index_for_cfd:.1f}",
-                delta="Yüksek değer refrakter aşınması ve arıza riskini artırır."
-            )
-            
-            if thermal_index_for_cfd > 75:
-                st.error("🚨 **Kritik Risk:** Derhal panel soğutma ve refrakter kontrolü gereklidir. Manyetik dengesizlik, bu bölgede aşınmayı tetikleyebilir.")
-            
-        with col_m1_cfd:
-            st.subheader("Sanal CFD Isı Dağılımı (DC Ark Akımı Manyetik Sapma Etkisi)")
-            st.info("Simülasyon, DC akımından kaynaklanan **elektromanyetik kuvvetlerin neden olduğu sapmanın** (termal dengesizlik), sıvı metal havuzunun ısı dağılımı üzerindeki etkisini gösterir. Soldaki 'Panel Termal Stres İndeksi' bu sapmanın büyüklüğü için bir vekil (proxy) olarak kullanılır.")
-            
-            # Manyetik Sapma Ayarı (Termal Stres İndeksi ile ilişkilendirildi)
-            # 0-100 Termal İndeks -> 0-3 Sapma Faktörü (Sapma yüksek stresle doğru orantılıdır)
-            magnetic_deviation_factor = thermal_index_for_cfd / 33.3 
-    
-            st.write(f"**Simüle Edilen DC Manyetik Sapma Etkisi Faktörü:** {magnetic_deviation_factor:.2f} (Merkezden Kayma Oranı)")
-    
-            pwr_cfd = input_data.get('power_kWh', 4000)
-            
-            X_grid, Y_grid, T_field = generate_cfd_fields(pwr_cfd, magnetic_deviation_factor) 
-            
-            fig, ax = plt.subplots(figsize=(8, 6))
+        with col_cfd:
+            st.subheader("Fırın İçi Termal Dağılım (CFD Simülasyonu)")
+            X_grid, Y_grid, T_field = generate_cfd_fields(input_data['power_kWh'])
+            fig_cfd, ax = plt.subplots(figsize=(6,4))
             c = ax.contourf(X_grid, Y_grid, T_field, levels=20, cmap='inferno')
-            fig.colorbar(c, label='Sıcaklık (°C)')
-            ax.set_title(f"EAF Taban Sıcaklık Dağılımı (Güç: {pwr_cfd:.0f} kWh)")
-            ax.set_xlabel("Fırın Genişliği (m)")
-            ax.set_ylabel("Fırın Derinliği (m)")
-            
-            st.pyplot(fig)
-            
+            fig_cfd.colorbar(c, label='Sıcaklık (°C)')
+            ax.set_title(f"Taban Sıcaklık Haritası (Güç: {input_data['power_kWh']} kWh)")
+            st.pyplot(fig_cfd)
 
-    # --- MODÜL 5: AI ENTERPRISE LEVEL (EBITDA) ---
-    with tab_m5_ebitda:
-        st.header("5️⃣ AI Enterprise Level (Kurumsal İş Zekası ve Stratejik Görünüm)")
-        st.info("Bu modül, Modül 2 ve Modül 3'ten gelen proses verimliliği çıktısını, kurumsal finansal hedefler (satış fiyatı, hedef tonaj, sabit maliyetler) ile birleştirerek işletme karlılığı (EBITDA) analizi yapar.")
+        st.markdown("### 🔥 Isınma Eğrisi Simülasyonu")
+        # Basit bir ısınma eğrisi
+        time_steps = np.linspace(0, input_data['tap_time_min'], 20)
+        temp_curve = 1500 + (prediction - 1500) * (time_steps / input_data['tap_time_min'])**0.5
+        fig_curve = px.line(x=time_steps, y=temp_curve, labels={'x':'Zaman (dk)', 'y':'Sıcaklık (°C)'}, title="Tahmini Isınma Yolu")
+        st.plotly_chart(fig_curve, use_container_width=True)
 
-        st.markdown("### 📈 İş Performansı ve Karlılık Metrikleri")
+    # ------------------------------------------------------------------
+    # MODÜL 4: ALARM, TAVSİYE VE KPI
+    # ------------------------------------------------------------------
+    elif selected_module == "4️⃣ Alarm, Tavsiye ve KPI'lar":
+        st.title("📢 Modül 4: Alarm Merkezi ve KPI Takibi")
         
-        col_m5_1, col_m5_2, col_m5_3 = st.columns(3)
+        # KPI Kartları
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Günlük Döküm Sayısı", "12", "+2")
+        k2.metric("Ort. Döküm Süresi", "52 dk", "-3 dk")
+        k3.metric("Enerji (kWh/ton)", "410", "+5")
+        k4.metric("Aktif Alarm Sayısı", "1", "Normal")
         
-        with col_m5_1:
-            st.metric("Aylık Brüt Gelir Hedefi (Simüle)", f"{total_sales_revenue:,.0f} $", "Hedef Satış Fiyatı Bazlı")
-        with col_m5_2:
-            st.metric("Tahmini Aylık Değişken Maliyet", f"{total_variable_cost_per_month:,.0f} $", "AI Proses Maliyet Bazlı")
-        with col_m5_3:
-            st.metric("Aylık Sabit Operasyonel Maliyetler", f"{total_fixed_cost_per_month:,.0f} $", "Personel & SG&A")
-            
         st.markdown("---")
-        st.markdown("### 📊 Karlılık Analizi (EBITDA)")
         
-        col_m5_4, col_m5_5 = st.columns(2)
-        
-        with col_m5_4:
-            # EBITDA Metriği
-            delta_value = f"{ebitda/total_sales_revenue * 100:.1f} % EBITDA Marjı" if total_sales_revenue > 0 else "N/A"
-            st.metric(
-                label="EBITDA (Faiz, Vergi ve Amortisman Öncesi Kar)",
-                value=f"{ebitda:,.0f} $",
-                delta=delta_value
-            )
+        c1, c2 = st.columns(2)
+        with c1:
+            st.subheader("🔔 Canlı Alarm Listesi")
+            alarms = pd.DataFrame({
+                "Zaman": ["10:45", "11:20", "14:05"],
+                "Ekipman": ["Panel 4", "Elektrot 2", "Oksijen Valfi"],
+                "Durum": ["Yüksek Sıcaklık", "Kırılma Riski", "Basınç Düşük"],
+                "Öncelik": ["Yüksek", "Orta", "Düşük"]
+            })
+            # Renklendirme fonksiyonu eklenebilir, basit tablo:
+            st.dataframe(alarms, use_container_width=True, hide_index=True)
             
-            if ebitda < 0:
-                st.error("🚨 EBITDA NEGATİF: Mevcut proses verimi ve maliyet yapısıyla hedeflere ulaşılamaz.")
-            elif ebitda < total_sales_revenue * 0.10: 
-                 st.warning("🔔 EBITDA DÜŞÜK: Karlılık marjı artırılmalı. Proses iyileştirmesi gerekiyor.")
+        with c2:
+            st.subheader("📋 Operatör Tavsiyeleri")
+            if prediction > 1650:
+                st.warning("⚠️ Sıcaklık çok yüksek. Gücü kesin.")
+            elif prediction < 1600:
+                st.error("⚠️ Sıcaklık düşük. Enerji verin.")
             else:
-                st.success("✅ EBITDA YETERLİ: Proses, satış hedeflerini destekliyor.")
-                
-        with col_m5_5:
-            st.info("💡 **AI-Destekli Karlılık Açıklaması**")
-            st.write(f"EBITDA marjı **%{ebitda/total_sales_revenue * 100:.1f}** olarak hesaplanmıştır.")
+                st.success("✅ Proses stabil ilerliyor.")
             
-            # AI Analizi ve Tavsiye (Proses İyileştirmesi)
-            if ebitda < 0:
-                st.markdown(f"**Tavsiye:** Negatif EBITDA'nın ana sebebi **{monthly_tonnage_target:,.0f} ton** hedefinin, toplam **{total_fixed_cost_per_month:,.0f} $** sabit maliyeti absorbe edememesidir. Ya üretimi artırın, ya sabit giderleri düşürün ya da satış fiyatını yükseltin.")
-            elif kwh_per_ton > 420: 
-                 st.markdown(f"**Tavsiye:** Marj yeterli olsa da, **Birim Enerji Tüketimi ({kwh_per_ton:.1f} kWh/ton)** yüksektir. Modül 3'te **Güç/Oksijen** ayarlarını optimize ederek değişken maliyetleri düşürün, EBITDA marjını artırın.")
-            else:
-                st.markdown("**Tavsiye:** Proses ve hedefler uyumlu görünüyor. Stratejik olarak gelecek elektrik fiyatı tahminlerini ({forecast_elec_price:.3f} $/kWh) dikkate alın.")
+            st.info("💡 İpucu: Bir sonraki şarjda hurda yoğunluğunu artırmak enerji verimini %2 iyileştirebilir.")
 
+    # ------------------------------------------------------------------
+    # MODÜL 5: AI ENTERPRISE LEVEL (EBITDA)
+    # ------------------------------------------------------------------
+    elif selected_module == "5️⃣ AI Enterprise Level (EBITDA)":
+        st.title("🏢 Modül 5: Kurumsal İş Zekası (EBITDA)")
+        
+        # Kurumsal Girdiler (Bu sayfaya özel)
+        with st.expander("Kurumsal Hedef Ayarları", expanded=True):
+            col_ent1, col_ent2 = st.columns(2)
+            sales_price = col_ent1.number_input("Hedef Satış Fiyatı ($/ton)", 500, 2000, 900)
+            monthly_tonnage = col_ent2.number_input("Aylık Hedef Tonaj", 1000, 50000, 10000)
+            fixed_costs = st.number_input("Aylık Sabit Giderler (Personel+Kira) $", 100000, 2000000, 500000)
+
+        # Hesaplamalar
+        unit_var_cost = (tonnage * price_scrap + input_data['power_kWh']*price_elec + input_data['oxygen_Nm3']*price_oxy + tonnage*1.8*price_electrode) / tonnage
+        
+        total_revenue = sales_price * monthly_tonnage
+        total_var_cost = unit_var_cost * monthly_tonnage
+        gross_profit = total_revenue - total_var_cost
+        ebitda = gross_profit - fixed_costs
+        
+        # Şelale Grafiği Verisi
+        fig_waterfall = go.Figure(go.Waterfall(
+            name = "EBITDA", orientation = "v",
+            measure = ["relative", "relative", "total", "relative", "total"],
+            x = ["Satış Geliri", "Değişken Maliyetler", "Brüt Kar", "Sabit Giderler", "EBITDA"],
+            textposition = "outside",
+            text = [f"${total_revenue/1000:.0f}k", f"-${total_var_cost/1000:.0f}k", f"${gross_profit/1000:.0f}k", f"-${fixed_costs/1000:.0f}k", f"${ebitda/1000:.0f}k"],
+            y = [total_revenue, -total_var_cost, 0, -fixed_costs, 0],
+            connector = {"line":{"color":"rgb(63, 63, 63)"}},
+        ))
+        fig_waterfall.update_layout(title = "Aylık Karlılık Analizi (Waterfall)", showlegend = False)
+        
+        st.plotly_chart(fig_waterfall, use_container_width=True)
+        
+        # Sonuç Kartları
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Aylık Ciro", f"${total_revenue:,.0f}")
+        m2.metric("EBITDA", f"${ebitda:,.0f}", delta_color="normal" if ebitda>0 else "inverse")
+        m3.metric("EBITDA Marjı", f"%{(ebitda/total_revenue)*100:.1f}")
+
+        if ebitda < 0:
+            st.error("🚨 Şirket Zarar Ediyor! Sabit giderleri düşürün veya satış fiyatını artırın.")
 
 if __name__ == "__main__":
     main()
