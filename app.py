@@ -20,26 +20,27 @@ st.set_page_config(
 
 def feature_engineering(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Termal Dengesizlik ve Hurda Kalite İndeksini hesaplar, 
+    Termal Stres ve Hurda Kalite İndeksini hesaplar, 
     ML modelinin kullanacağı yeni feature'ları oluşturur.
     """
     df = df.copy()
     
-    # --- 1. Termal Dengesizlik İndeksi (Modül 1 & 4) ---
+    # --- 1. Termal Stres İndeksi (Modül 1 & 4) - Yüksek değerler Manyetik Dengesizlik Riskini Temsil Eder ---
     required_thermal_cols = ["panel_T_in_C", "panel_T_out_C", "panel_flow_kg_s", "power_kWh"]
     if all(col in df.columns for col in required_thermal_cols):
         cp_kJ = 4.18  
         df['Q_Panel_kW'] = df['panel_flow_kg_s'] * (df['panel_T_out_C'] - df['panel_T_in_C']) * cp_kJ 
         
-        # Dengesizlik Simülasyonu: Yüksek Q_Panel ve Güç termal stresi artırır
-        df['Thermal_Imbalance_Index'] = (df['Q_Panel_kW'] * 0.1) + (df['power_kWh'] * 0.005) 
+        # Termal Stres Simülasyonu: Yüksek Q_Panel ve Güç, termal stresi artırır. 
+        # (Bu, DC manyetik alanının neden olduğu refrakter aşınmasının sonuçlarını simüle edebilir)
+        df['Thermal_Stress_Index'] = (df['Q_Panel_kW'] * 0.1) + (df['power_kWh'] * 0.005) 
         
         # 0-100 aralığına normalize et
-        max_val = df['Thermal_Imbalance_Index'].max()
+        max_val = df['Thermal_Stress_Index'].max()
         if max_val > 0:
-            df['Thermal_Imbalance_Index'] = (df['Thermal_Imbalance_Index'] / max_val) * 100
+            df['Thermal_Stress_Index'] = (df['Thermal_Stress_Index'] / max_val) * 100
         else:
-             df['Thermal_Imbalance_Index'] = 50.0 
+             df['Thermal_Stress_Index'] = 50.0 
         
         df = df.drop(columns=['Q_Panel_kW'])
 
@@ -84,20 +85,34 @@ def create_gauge_chart(value, target=1620, min_range=1500, max_range=1750):
     fig.update_layout(height=300, margin=dict(l=20, r=20, t=30, b=20))
     return fig
 
-def generate_cfd_fields(power, oxygen, time, foam_level, magnetic_deviation):
-    """Manyetik sapmayı simüle eden basit CFD fonksiyonu (Modül 3)."""
+def generate_cfd_fields(power, magnetic_deviation_factor):
+    """
+    Arc Ocağı Taban Sıcaklık Alanını Simüle Eder (DC Ark Akımının Manyetik Sapma Etkisi).
+    DC akımının yarattığı elektromanyetik dengesizlik, sıvı metal havuzunun ısı merkezini kaydırır.
+    """
     nx, ny = 50, 50
     x = np.linspace(0, 10, nx)
     y = np.linspace(0, 10, ny)
     X, Y = np.meshgrid(x, y)
     
-    # Sapma merkezini Manyetik Sapma faktörüne göre kaydır
-    center_x = 5.0 + (magnetic_deviation * 0.3) 
-    center_y = 5.0 - (magnetic_deviation * 0.1) 
+    # 1. Ark Merkezini Sapma Faktörüne Göre Kaydırma (Manyetik Etki)
+    # 5.0, 5.0 fırının merkezi
+    # Sapma Faktörü, 0 (Merkez) ile 3 (Maksimum Köşe Kayması) arasında bir değer alır.
+    deviation_amount = magnetic_deviation_factor * 0.8
+    center_x = 5.0 + deviation_amount * np.cos(np.pi/4) 
+    center_y = 5.0 + deviation_amount * np.sin(np.pi/4)
     dist_sq = (X - center_x)**2 + (Y - center_y)**2
     
-    base_temp = 1500 + (power / 100)
-    temp_field = base_temp * np.exp(-dist_sq / (10.0 + magnetic_deviation * 0.5))
+    # 2. Dağılım Sabiti (Havuz Hacmi): Güç arttıkça ark daha yaygınlaşır (daha geniş sıvı havuzu).
+    diffusion_factor = 10.0 + (power / 500.0) 
+    
+    # 3. Ark Bölgesi Tepe Sıcaklığı (Güçle orantılı)
+    max_arc_temp = 1600 + (power * 0.05) 
+    
+    # Gauss dağılımı kullanarak sıcaklık alanı oluşturma
+    temp_field = max_arc_temp * np.exp(-dist_sq / diffusion_factor)
+    # En düşük sıcaklık 1500 C'nin altına düşmesin
+    temp_field = np.maximum(temp_field, 1500)
     
     return X, Y, temp_field
 
@@ -136,7 +151,7 @@ def main():
             st.stop()
 
     # --- VERİ ÖN İŞLEME ve FEATURE ENGINEERING ---
-    df = feature_engineering(df) # Hurda Kalite ve Termal Dengesizlik İndeksleri hesaplanır
+    df = feature_engineering(df) 
     
     # --- MODEL EĞİTİMİ ---
     target_col = "tap_temperature_C"
@@ -168,7 +183,6 @@ def main():
     st.sidebar.markdown("---")
     st.sidebar.header("🎛️ Proses Simülasyon Parametreleri")
     
-    # Tonaj Girdisi
     default_tonnage = 10.0 
     tonnage = st.sidebar.number_input(
         "Tahmini Ergitme Tonajı (ton)", 
@@ -178,7 +192,7 @@ def main():
         step=1.0
     )
     
-    # --- Hurda Kalite Girişi (Modül 2) ---
+    # --- Hurda Kalite Girişi ---
     st.sidebar.markdown("---")
     st.sidebar.subheader("♻️ Hurda Kalite Girdisi")
     quality_input_mode = st.sidebar.radio(
@@ -208,7 +222,7 @@ def main():
         
     st.sidebar.markdown("---")
     
-    # --- Kalan Proses Parametre Girdileri (Modül 3) ---
+    # --- Kalan Proses Parametre Girdileri ---
     for col in X.columns:
         if col not in input_data:
             min_v = float(df[col].min())
@@ -221,8 +235,8 @@ def main():
                 input_data[col] = st.sidebar.slider("Oksijen (oxygen_Nm3)", min_v, max_v, mean_v)
             elif col == 'tap_time_min':
                 input_data[col] = st.sidebar.slider("Döküm Süresi (tap_time_min)", min_v, max_v, mean_v)
-            elif col == 'Thermal_Imbalance_Index': # Modül 1/4'ten gelen risk faktörü
-                input_data[col] = st.sidebar.slider("🔥 Termal Dengesizlik İndeksi (0-100)", 0.0, 100.0, float(df['Thermal_Imbalance_Index'].median()))
+            elif col == 'Thermal_Stress_Index': 
+                input_data[col] = st.sidebar.slider("🔥 Panel Termal Stres İndeksi (0-100) - Manyetik Dengesizlik Riski", 0.0, 100.0, float(df['Thermal_Stress_Index'].median()))
             else:
                 input_data[col] = st.sidebar.slider(f"{col}", min_v, max_v, mean_v)
             
@@ -230,35 +244,12 @@ def main():
     st.sidebar.markdown("---")
     st.sidebar.subheader("💰 Anlık Birim Fiyatlar ($)")
     
-    # **YENİ:** Hurda, Elektrot, Elektrik ve Oksijen Fiyat Girişleri
     price_scrap_ton = st.sidebar.number_input("Hurda ($/ton)", 100.0, 800.0, 450.0, step=10.0)
     price_electrode = st.sidebar.number_input("Elektrot ($/kg)", 1.0, 10.0, 4.5, step=0.1)
     electrode_rate = st.sidebar.number_input("Elektrot Sarfiyatı (kg/ton)", 0.5, 5.0, 1.8, step=0.1)
     
     price_elec = st.sidebar.number_input("Elektrik ($/kWh)", 0.01, 0.50, 0.10, step=0.01)
     price_oxy = st.sidebar.number_input("Oksijen ($/Nm³)", 0.01, 1.00, 0.15, step=0.01)
-    
-    # --- TAHMİN VE ANALİZ ---
-    
-    # Giriş data frame'ini oluştururken kolon sırasını ML eğitimindeki X'e göre ayarlamak kritik
-    input_df = pd.DataFrame([input_data])[X.columns]
-    prediction = model.predict(input_df)[0]
-    
-    # Proses Maliyeti Hesaplaması (Modül 2)
-    pwr = input_data.get('power_kWh', 0)
-    oxy = input_data.get('oxygen_Nm3', 0)
-    
-    # YENİ: Hurda Maliyeti Eklendi
-    cost_scrap = tonnage * price_scrap_ton 
-    
-    cost_e = pwr * price_elec
-    cost_o = oxy * price_oxy
-    cost_el = tonnage * electrode_rate * price_electrode 
-    
-    # Hurda maliyeti artık toplam maliyete dahil
-    total_cost = cost_scrap + cost_e + cost_o + cost_el 
-    cost_per_ton = total_cost / tonnage
-    kwh_per_ton = pwr / tonnage
     
     # --------------------------------------------------------------------------------
     # 4. KURUMSAL (ENTERPRISE) GİRDİLERİ - Sidebar (Modül 5)
@@ -293,6 +284,57 @@ def main():
         0.0, 10.0, 7.5, 0.1
     )
     
+    # EBITDA için Sabit Maliyet Girdileri (Modül 5)
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("🧮 Aylık Sabit Maliyetler ($)")
+    price_labor_monthly = st.sidebar.number_input(
+        "Personel/İşçilik Gideri (Aylık $)", 
+        min_value=10000.0, 
+        max_value=5000000.0, 
+        value=500000.0, 
+        step=10000.0
+    )
+    price_sg_a_monthly = st.sidebar.number_input(
+        "Genel Yönetim/SG&A (Aylık $)", 
+        min_value=10000.0, 
+        max_value=2000000.0, 
+        value=250000.0, 
+        step=5000.0
+    )
+    
+    # --- TAHMİN VE ANALİZ ---
+    
+    input_df = pd.DataFrame([input_data])[X.columns]
+    prediction = model.predict(input_df)[0]
+    
+    # Proses Maliyeti Hesaplaması (Değişken Maliyetler - Tek Ergitme)
+    pwr = input_data.get('power_kWh', 0)
+    oxy = input_data.get('oxygen_Nm3', 0)
+    
+    cost_scrap = tonnage * price_scrap_ton 
+    cost_e = pwr * price_elec
+    cost_o = oxy * price_oxy
+    cost_el = tonnage * electrode_rate * price_electrode 
+    
+    total_variable_cost_per_heat = cost_scrap + cost_e + cost_o + cost_el 
+    
+    cost_per_ton = total_variable_cost_per_heat / tonnage
+    kwh_per_ton = pwr / tonnage
+    
+    # Aylık Finansal Hesaplamalar (Modül 5)
+    
+    # 1. Gelir
+    total_sales_revenue = sales_price_ton * monthly_tonnage_target
+    
+    # 2. Maliyetler
+    total_variable_cost_per_month = cost_per_ton * monthly_tonnage_target
+    total_fixed_cost_per_month = price_labor_monthly + price_sg_a_monthly
+    total_operating_cost = total_variable_cost_per_month + total_fixed_cost_per_month 
+    
+    # 3. Karlılık
+    ebitda = total_sales_revenue - total_operating_cost
+    
+
     # --- TABLAR (Modül 3, 4, 5) ---
     tab_main, tab_cfd, tab_enterprise = st.tabs([
         "📊 Karar Destek Paneli (Modül 3)", 
@@ -318,7 +360,7 @@ def main():
         
         with col_advice:
             st.subheader("🤖 Operatör Asistanı (Modül 4)")
-            thermal_index = input_data.get('Thermal_Imbalance_Index', 50.0)
+            thermal_index = input_data.get('Thermal_Stress_Index', 50.0) 
             quality_index = input_data.get('Scrap_Quality_Index', 70.0) 
 
             
@@ -333,13 +375,13 @@ def main():
                 st.warning(f"🔥 **Aşırı Isınma ({prediction:.1f}°C)**: Enerji israfını önlemek için gücü azaltın.")
                 advice_temp = "Gücü azaltın."
 
-            # Termal Dengesizlik Tavsiyesi (Modül 1 & 4)
+            # Termal Stres Tavsiyesi (Modül 1 & 4) - Manyetik Denge/Stres Tavsiyesi
             if thermal_index > 75:
-                st.error(f"🚨 **Termal Dengesizlik RİSKİ ({thermal_index:.1f} İndeks)**")
-                advice_thermal = "AC/DC Akımı düşürülmeli. **Bakım Modülü Uyarısı!**"
+                st.error(f"🚨 **Yüksek Termal Stres/Manyetik Dengesizlik RİSKİ ({thermal_index:.1f} İndeks)**")
+                advice_thermal = "DC akım kontrolü ve panel soğutma sistemi/refrakter kontrolü. **Bakım Uyarısı!**" 
             elif thermal_index > 55:
-                st.warning(f"🔔 **Termal Dengesizlik UYARISI ({thermal_index:.1f} İndeks)**")
-                advice_thermal = "Manyetik karıştırma kontrolü."
+                st.warning(f"🔔 **Termal Stres/Dengesizlik UYARISI ({thermal_index:.1f} İndeks)**")
+                advice_thermal = "DC akımını ayarlayarak manyetik dengeyi sağlamaya çalışın veya soğutma debisi kontrol edin."
             else:
                 st.info(f"✨ Termal Denge Stabil ({thermal_index:.1f} İndeks)")
                 advice_thermal = "Denge stabil."
@@ -353,7 +395,7 @@ def main():
 
 
             st.markdown("---")
-            st.write(f"**Özet Tavsiye:** Sıcaklık: *{advice_temp}* | Denge: *{advice_thermal}* | Kalite: *{advice_quality}*")
+            st.write(f"**Özet Tavsiye:** Sıcaklık: *{advice_temp}* | Stres/Denge: *{advice_thermal}* | Kalite: *{advice_quality}*")
             
         st.divider()
 
@@ -363,16 +405,14 @@ def main():
         with col_cost:
             st.subheader("💵 Maliyet ve Performans Analizi (Modül 2)")
             
-            # Maliyet hesaplamaları yukarıda yapıldı (cost_per_ton, kwh_per_ton)
-
             st.dataframe(pd.DataFrame({
-                "Kalem": ["Hurda ($)", "Elektrik ($)", "Oksijen ($)", "Elektrot ($)", "TOPLAM MALİYET ($)"],
-                "Değer": [f"{cost_scrap:.2f}", f"{cost_e:.2f}", f"{cost_o:.2f}", f"{cost_el:.2f}", f"{total_cost:.2f}"]
+                "Kalem": ["Hurda ($)", "Elektrik ($)", "Oksijen ($)", "Elektrot ($)", "TOPLAM DEĞİŞKEN MALİYET ($)"],
+                "Değer": [f"{cost_scrap:.2f}", f"{cost_e:.2f}", f"{cost_o:.2f}", f"{cost_el:.2f}", f"{total_variable_cost_per_heat:.2f}"]
             }), hide_index=True, use_container_width=True)
             
             st.markdown("---")
-            target_cost_per_ton = 100.0 # Hedef maliyet (örnek)
-            target_kwh_per_ton = 400.0 # Hedef enerji tüketimi (örnek)
+            target_cost_per_ton = 100.0 
+            target_kwh_per_ton = 400.0 
             
             st.metric(
                 label="Toplam Birim Maliyet ($/ton)", 
@@ -394,7 +434,7 @@ def main():
             }).sort_values(by='Etki', ascending=False)
             
             st.bar_chart(importances.set_index('Faktör'), color="#0056b3")
-            st.caption("Modelin sıcaklık tahmininde en çok dikkate aldığı parametreler. **Scrap_Quality_Index** ve **Thermal_Imbalance_Index** yeni eklenen faktörlerdir.")
+            st.caption("Modelin sıcaklık tahmininde en çok dikkate aldığı parametreler. **Scrap_Quality_Index** ve **Thermal_Stress_Index** yeni eklenen faktörlerdir.")
             
             st.markdown("---")
             st.write("**Çıkarım:**")
@@ -404,24 +444,24 @@ def main():
 
     # --- TAB 2: CFD GÖRÜNÜMÜ (Modül 3 - Dijital İkiz) ---
     with tab_cfd:
-        st.subheader("Sanal CFD Isı Dağılımı (Manyetik Sapma Simülasyonu)")
-        st.info("Bu sekme, Dijital İkiz konseptinin bir parçasıdır. Soldaki 'Thermal Dengesizlik İndeksi' ayarını değiştirerek sıcaklık dağılımının merkezin dışına kaymasını gözlemleyin.")
+        st.subheader("Sanal CFD Isı Dağılımı (DC Ark Akımı Manyetik Sapma Simülasyonu)")
+        st.info("Bu sekme, Dijital İkiz konseptinin bir parçasıdır. DC akımından kaynaklanan **elektromanyetik kuvvetlerin neden olduğu sapmanın** (termal dengesizlik), sıvı metal havuzunun ısı dağılımı üzerindeki etkisini simüle eder. Soldaki **'Panel Termal Stres İndeksi'** ayarını değiştirerek bu sapmanın eriyik havuzunun **şeklini ve yerini** nasıl değiştirdiğini gözlemleyin.")
         
-        # Manyetik Sapma Ayarı (Termal İndeks ile ilişkilendirildi)
-        thermal_index_for_cfd = input_data.get('Thermal_Imbalance_Index', 50.0)
-        magnetic_deviation = thermal_index_for_cfd / 10.0 # 0-100 Termal İndeks -> 0-10 Sapma
-        
-        st.write(f"**Manyetik Sapma Faktörü:** {magnetic_deviation:.1f} (Termal Dengesizlik İndeksine göre otomatik ayarlandı.)")
+        # Manyetik Sapma Ayarı (Termal Stres İndeksi ile ilişkilendirildi)
+        thermal_index_for_cfd = input_data.get('Thermal_Stress_Index', 50.0) 
+        # 0-100 Termal İndeks -> 0-3 Sapma Faktörü (Sapma yüksek stresle doğru orantılıdır)
+        magnetic_deviation_factor = thermal_index_for_cfd / 33.3 
+
+        st.write(f"**Simüle Edilen DC Manyetik Sapma Etkisi Faktörü:** {magnetic_deviation_factor:.2f} (Merkezden Kayma Oranı)")
 
         pwr_cfd = input_data.get('power_kWh', 4000)
-        oxy_cfd = input_data.get('oxygen_Nm3', 200)
         
-        X_grid, Y_grid, T_field = generate_cfd_fields(pwr_cfd, oxy_cfd, 50, 0.5, magnetic_deviation)
+        X_grid, Y_grid, T_field = generate_cfd_fields(pwr_cfd, magnetic_deviation_factor) 
         
         fig, ax = plt.subplots(figsize=(8, 6))
         c = ax.contourf(X_grid, Y_grid, T_field, levels=20, cmap='inferno')
         fig.colorbar(c, label='Sıcaklık (°C)')
-        ax.set_title(f"EAF Taban Sıcaklık Dağılımı (Sapma Faktörü: {magnetic_deviation:.1f})")
+        ax.set_title(f"EAF Taban Sıcaklık Dağılımı (Güç: {pwr_cfd:.0f} kWh)")
         ax.set_xlabel("Fırın Genişliği (m)")
         ax.set_ylabel("Fırın Derinliği (m)")
         
@@ -431,36 +471,65 @@ def main():
     with tab_enterprise:
         st.subheader("🏢 Kurumsal İş Zekası ve Stratejik Görünüm (Modül 5)")
         
-        st.markdown("### 📈 İş Performansı Metrikleri (Simülasyon)")
-        
-        # Simüle Edilmiş Kar Hesaplaması
-        total_production_cost = cost_per_ton * monthly_tonnage_target # Anlık proses maliyet bazlı aylık maliyet
-        total_sales_revenue = sales_price_ton * monthly_tonnage_target
-        potential_profit = total_sales_revenue - total_production_cost
-        
+        st.markdown("### 📈 İş Performansı ve Karlılık Metrikleri")
         
         col_m5_1, col_m5_2, col_m5_3 = st.columns(3)
         
         with col_m5_1:
-            st.metric("Aylık Brüt Gelir Hedefi (Simüle)", f"{total_sales_revenue:,.0f} $", "SAP Satış Fiyatı Bazlı")
+            st.metric("Aylık Brüt Gelir Hedefi (Simüle)", f"{total_sales_revenue:,.0f} $", "Hedef Satış Fiyatı Bazlı")
         with col_m5_2:
-            st.metric("Tahmini Aylık Toplam Maliyet", f"{total_production_cost:,.0f} $", "Anlık Proses Maliyet Bazlı")
+            st.metric("Tahmini Aylık Değişken Maliyet", f"{total_variable_cost_per_month:,.0f} $", "AI Proses Maliyet Bazlı")
         with col_m5_3:
-            st.metric("Potansiyel Aylık Kar (Brüt)", f"{potential_profit:,.0f} $", delta=f"{potential_profit/total_sales_revenue * 100:.1f} % Kar Marjı")
-
+            st.metric("Aylık Sabit Operasyonel Maliyetler", f"{total_fixed_cost_per_month:,.0f} $", "Personel & SG&A")
+            
         st.markdown("---")
-        st.markdown("### 📊 Stratejik Girdi Tahmin Raporu")
+        st.markdown("### 📊 Karlılık Analizi (EBITDA)")
         
         col_m5_4, col_m5_5 = st.columns(2)
         
         with col_m5_4:
+            # EBITDA Metriği
+            delta_value = f"{ebitda/total_sales_revenue * 100:.1f} % EBITDA Marjı" if total_sales_revenue > 0 else "N/A"
+            st.metric(
+                label="EBITDA (Faiz, Vergi ve Amortisman Öncesi Kar)",
+                value=f"{ebitda:,.0f} $",
+                delta=delta_value
+            )
+            
+            if ebitda < 0:
+                st.error("🚨 EBITDA NEGATİF: Mevcut proses verimi ve maliyet yapısıyla hedeflere ulaşılamaz.")
+            elif ebitda < total_sales_revenue * 0.10: 
+                 st.warning("🔔 EBITDA DÜŞÜK: Karlılık marjı artırılmalı. Proses iyileştirmesi gerekiyor.")
+            else:
+                st.success("✅ EBITDA YETERLİ: Proses, satış hedeflerini destekliyor.")
+                
+        with col_m5_5:
+            st.info("💡 **AI-Destekli Karlılık Açıklaması**")
+            st.write(f"EBITDA marjı **%{ebitda/total_sales_revenue * 100:.1f}** olarak hesaplanmıştır.")
+            st.write("Bu değer, mevcut **AI tarafından simüle edilen proses verimliliğinin** (kWh/ton) kurumsal hedeflerle uyumunu gösterir.")
+            
+            # AI Analizi ve Tavsiye (Proses İyileştirmesi)
+            if ebitda < 0:
+                st.markdown(f"**Tavsiye:** Negatif EBITDA'nın ana sebebi **{monthly_tonnage_target:,.0f} ton** hedefinin, toplam **{total_fixed_cost_per_month:,.0f} $** sabit maliyeti absorbe edememesidir. Ya üretimi artırın, ya sabit giderleri düşürün ya da satış fiyatını yükseltin.")
+            elif kwh_per_ton > 420: # Yüksek enerji tüketimi varsayımı
+                 st.markdown(f"**Tavsiye:** Marj yeterli olsa da, **Birim Enerji Tüketimi ({kwh_per_ton:.1f} kWh/ton)** yüksektir. Modül 3'te **Güç/Oksijen** ayarlarını optimize ederek değişken maliyetleri düşürün, EBITDA marjını artırın.")
+            else:
+                st.markdown("**Tavsiye:** Proses ve hedefler uyumlu görünüyor. Pazarlama ve satış stratejilerini desteklemek için **Global Talep İndeksi**'ni düzenli olarak takip edin.")
+
+
+        st.markdown("---")
+        st.markdown("### 📊 Stratejik Girdi Tahmin Raporu")
+        
+        col_m5_6, col_m5_7 = st.columns(2)
+        
+        with col_m5_6:
             st.info("💡 **Girdi Tahminleri:** Proses maliyetini etkileyecek gelecekteki fiyat tahminleri.")
             st.dataframe(pd.DataFrame({
                 "Kalem": ["Hurda Fiyatı ($/ton)", "Tahmini Gelecek Elektrik Fiyatı ($/kWh)", "Elektrot Fiyatı ($/kg)"],
                 "Değer": [f"{price_scrap_ton:.0f} $", f"{forecast_elec_price:.3f} $", f"{price_electrode:.2f} $"]
             }), hide_index=True, use_container_width=True)
 
-        with col_m5_5:
+        with col_m5_7:
             st.info("🌎 **Pazar ve Talep Analizi:** Üretim planlama ve satış stratejisine etki eden makro faktörler.")
             st.metric("Global Talep İndeksi", f"{global_demand_index:.1f}/10", delta=f"Talep gücü: {'Yüksek' if global_demand_index > 7 else ('Orta' if global_demand_index > 4 else 'Düşük')}")
             st.metric("Hedeflenen Tonaj", f"{monthly_tonnage_target:,.0f} ton", delta="Aylık SAP Hedefi")
