@@ -25,7 +25,7 @@ def feature_engineering(df: pd.DataFrame) -> pd.DataFrame:
     """
     df = df.copy()
     
-    # --- 1. Termal Stres İndeksi (Modül 1 & 4) - Yüksek değerler Manyetik Dengesizlik Riskini Temsil Eder ---
+    # --- 1. Termal Stres İndeksi (Modül 1 & 4) - Yüksek değerler Manyetik Dengesizlik Riskini Temsil Eder. ---
     required_thermal_cols = ["panel_T_in_C", "panel_T_out_C", "panel_flow_kg_s", "power_kWh"]
     if all(col in df.columns for col in required_thermal_cols):
         cp_kJ = 4.18  
