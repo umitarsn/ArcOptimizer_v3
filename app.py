@@ -229,10 +229,36 @@ def main():
     # Maliyet Girdileri (Modül 2)
     st.sidebar.markdown("---")
     st.sidebar.subheader("💰 Anlık Birim Fiyatlar ($)")
-    price_elec = st.sidebar.number_input("Elektrik ($/kWh)", 0.01, 0.50, 0.10)
-    price_oxy = st.sidebar.number_input("Oksijen ($/Nm³)", 0.01, 1.00, 0.15)
-    price_electrode = st.sidebar.number_input("Elektrot ($/kg)", 1.0, 10.0, 4.5)
-    electrode_rate = st.sidebar.number_input("Elektrot Sarfiyatı (kg/ton)", 0.5, 5.0, 1.8)
+    
+    # **YENİ:** Hurda, Elektrot, Elektrik ve Oksijen Fiyat Girişleri
+    price_scrap_ton = st.sidebar.number_input("Hurda ($/ton)", 100.0, 800.0, 450.0, step=10.0)
+    price_electrode = st.sidebar.number_input("Elektrot ($/kg)", 1.0, 10.0, 4.5, step=0.1)
+    electrode_rate = st.sidebar.number_input("Elektrot Sarfiyatı (kg/ton)", 0.5, 5.0, 1.8, step=0.1)
+    
+    price_elec = st.sidebar.number_input("Elektrik ($/kWh)", 0.01, 0.50, 0.10, step=0.01)
+    price_oxy = st.sidebar.number_input("Oksijen ($/Nm³)", 0.01, 1.00, 0.15, step=0.01)
+    
+    # --- TAHMİN VE ANALİZ ---
+    
+    # Giriş data frame'ini oluştururken kolon sırasını ML eğitimindeki X'e göre ayarlamak kritik
+    input_df = pd.DataFrame([input_data])[X.columns]
+    prediction = model.predict(input_df)[0]
+    
+    # Proses Maliyeti Hesaplaması (Modül 2)
+    pwr = input_data.get('power_kWh', 0)
+    oxy = input_data.get('oxygen_Nm3', 0)
+    
+    # YENİ: Hurda Maliyeti Eklendi
+    cost_scrap = tonnage * price_scrap_ton 
+    
+    cost_e = pwr * price_elec
+    cost_o = oxy * price_oxy
+    cost_el = tonnage * electrode_rate * price_electrode 
+    
+    # Hurda maliyeti artık toplam maliyete dahil
+    total_cost = cost_scrap + cost_e + cost_o + cost_el 
+    cost_per_ton = total_cost / tonnage
+    kwh_per_ton = pwr / tonnage
     
     # --------------------------------------------------------------------------------
     # 4. KURUMSAL (ENTERPRISE) GİRDİLERİ - Sidebar (Modül 5)
@@ -267,25 +293,7 @@ def main():
         0.0, 10.0, 7.5, 0.1
     )
     
-    # --- TAHMİN VE ANALİZ ---
-    
-    # Giriş data frame'ini oluştururken kolon sırasını ML eğitimindeki X'e göre ayarlamak kritik
-    input_df = pd.DataFrame([input_data])[X.columns]
-    prediction = model.predict(input_df)[0]
-    
-    # Proses Maliyeti Hesaplaması (Modül 2)
-    pwr = input_data.get('power_kWh', 0)
-    oxy = input_data.get('oxygen_Nm3', 0)
-    cost_e = pwr * price_elec
-    cost_o = oxy * price_oxy
-    cost_el = tonnage * electrode_rate * price_electrode 
-    total_cost = cost_e + cost_o + cost_el
-    cost_per_ton = total_cost / tonnage
-    kwh_per_ton = pwr / tonnage
-
-
     # --- TABLAR (Modül 3, 4, 5) ---
-    # !!! Yeni Modül 5 sekmesi eklendi !!!
     tab_main, tab_cfd, tab_enterprise = st.tabs([
         "📊 Karar Destek Paneli (Modül 3)", 
         "🔥 CFD Simülasyonu (Modül 3)",
@@ -358,8 +366,8 @@ def main():
             # Maliyet hesaplamaları yukarıda yapıldı (cost_per_ton, kwh_per_ton)
 
             st.dataframe(pd.DataFrame({
-                "Kalem": ["Elektrik ($)", "Oksijen ($)", "Elektrot ($)", "TOPLAM MALİYET ($)"],
-                "Değer": [f"{cost_e:.2f}", f"{cost_o:.2f}", f"{cost_el:.2f}", f"{total_cost:.2f}"]
+                "Kalem": ["Hurda ($)", "Elektrik ($)", "Oksijen ($)", "Elektrot ($)", "TOPLAM MALİYET ($)"],
+                "Değer": [f"{cost_scrap:.2f}", f"{cost_e:.2f}", f"{cost_o:.2f}", f"{cost_el:.2f}", f"{total_cost:.2f}"]
             }), hide_index=True, use_container_width=True)
             
             st.markdown("---")
@@ -448,8 +456,8 @@ def main():
         with col_m5_4:
             st.info("💡 **Girdi Tahminleri:** Proses maliyetini etkileyecek gelecekteki fiyat tahminleri.")
             st.dataframe(pd.DataFrame({
-                "Kalem": ["Tahmini Gelecek Elektrik Fiyatı ($/kWh)", "Elektrot Fiyatı ($/kg - Sabit)", "Anlık Proses Birim Maliyeti ($/ton)"],
-                "Değer": [f"{forecast_elec_price:.3f} $", f"{price_electrode:.2f} $", f"{cost_per_ton:.2f} $"]
+                "Kalem": ["Hurda Fiyatı ($/ton)", "Tahmini Gelecek Elektrik Fiyatı ($/kWh)", "Elektrot Fiyatı ($/kg)"],
+                "Değer": [f"{price_scrap_ton:.0f} $", f"{forecast_elec_price:.3f} $", f"{price_electrode:.2f} $"]
             }), hide_index=True, use_container_width=True)
 
         with col_m5_5:
