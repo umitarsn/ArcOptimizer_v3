@@ -13,23 +13,23 @@ import plotly.express as px
 LOGO_PROCESS_SUCCESS = False
 LOGO_ERROR_MESSAGE = ""
 icon_preview_obj = None
+ICON_FILE_NAME = "apple-icon.png" # Yeni ikon dosya adı
 
 # ------------------------------------------------------------
-# 1. LOGO VE İKON İŞLEME (iOS UYUMLU - MUTLAK SOL KARE KESİM)
+# 1. LOGO VE İKON İŞLEME (DOSYAYA KAYDETME İLE BASE64 BYPASS)
 # ------------------------------------------------------------
 
 def process_logo_for_ios(image_path):
     """
-    Logoyu iPhone ana ekranı için ideal kare boyuta (120x120) getirir.
-    Logonun sol ucundan, yüksekliği kadar bir kare keserek (Şekil ve BG kısmı)
-    başka hiçbir yazının ikona girmemesini garanti eder.
+    Logoyu işler ve Base64 hatasını atlatmak için doğrudan dosyaya kaydeder.
     """
     global LOGO_PROCESS_SUCCESS, LOGO_ERROR_MESSAGE, icon_preview_obj
+    is_file_linked = False # İkonun Base64 mi yoksa dosya yolu mu olduğunu belirler
     try:
         # 1. Logoyu aç
         img = Image.open(image_path)
         
-        # 2. Şeffaf (PNG) ise beyaz zemin ekle
+        # 2. Şeffaf (PNG) ise beyaz zemin ekle (Streamlit'in arka planıyla uyum için)
         if img.mode in ('RGBA', 'LA'):
             background = Image.new(img.mode[:-1], img.size, (255, 255, 255))
             background.paste(img, img.split()[-1])
@@ -37,35 +37,39 @@ def process_logo_for_ios(image_path):
         
         # 3. Mutlak Sol Kare Kesim (Şekil + BG kısmı)
         width, height = img.size
-        # Sol üst köşe (0, 0) dan başlayıp, yüksekliği kadar genişliğe sahip kare kes
-        left = 0
-        top = 0
-        right = height 
-        bottom = height
-        
+        left, top, right, bottom = 0, 0, height, height
         img_square_cropped = img.crop((left, top, right, bottom))
         
-        # 4. İkon boyutuna (120x120 daha kısa Base64 kodu için) küçült/büyüt
-        img_final_icon = img_square_cropped.resize((120, 120)) # <--- GÜNCELLENEN BOYUT
+        # 4. İkon boyutuna (120x120) küçült/büyüt
+        img_final_icon = img_square_cropped.resize((120, 120))
         icon_preview_obj = img_final_icon
 
-        # 5. Base64 formatına çevir
-        buffered = io.BytesIO()
-        img_final_icon.save(buffered, format="PNG")
-        img_str = base64.b64encode(buffered.getvalue()).decode()
-        
-        LOGO_PROCESS_SUCCESS = True
-        return f"data:image/png;base64,{img_str}", img
+        # 5. KRİTİK: Base64 yerine diske kaydet ve dosya yolu döndür.
+        try:
+            img_final_icon.save(ICON_FILE_NAME, format="PNG")
+            LOGO_PROCESS_SUCCESS = True
+            is_file_linked = True
+            return ICON_FILE_NAME, img, is_file_linked # Dosya yolunu döndür
+
+        except Exception as save_e:
+            LOGO_ERROR_MESSAGE = f"⚠️ Dosya kaydetme hatası: {save_e}. Base64 yedeklemesine geçiliyor..."
+            
+            # Kaydetme başarısız olursa Base64 üret (bu, zaten iOS'ta başarısız olan senaryo)
+            buffered = io.BytesIO()
+            img_final_icon.save(buffered, format="PNG")
+            img_str = base64.b64encode(buffered.getvalue()).decode()
+            LOGO_PROCESS_SUCCESS = True
+            return f"data:image/png;base64,{img_str}", img, is_file_linked
         
     except FileNotFoundError:
         LOGO_ERROR_MESSAGE = f"❌ Hata: '{image_path}' dosyası bulunamadı. Lütfen dosya adını kontrol edin."
-        return None, None
+        return None, None, False
     except Exception as e:
         LOGO_ERROR_MESSAGE = f"⚠️ Logo işleme hatası: {e}"
-        return None, None
+        return None, None, False
 
-# logo.jpg kullanılıyor. Eğer logo.png kullanıyorsanız burayı değiştirin.
-ios_icon_b64, original_logo_obj = process_logo_for_ios("logo.jpg")
+# Logoyu işlemeye çalış
+icon_href, original_logo_obj, is_file_linked = process_logo_for_ios("logo.jpg")
 
 # ------------------------------------------------------------
 # 2. SAYFA AYARLARI
@@ -73,18 +77,17 @@ ios_icon_b64, original_logo_obj = process_logo_for_ios("logo.jpg")
 st.set_page_config(
     page_title="Ferrokrom AI",
     layout="wide",
-    # Sidebar ve tab ikonu için kırpılmış logoyu kullan
     page_icon=icon_preview_obj if icon_preview_obj else "⚒️", 
     initial_sidebar_state="expanded"
 )
 
 # iOS Ana Ekran İkonu Enjeksiyonu
-if ios_icon_b64:
+if icon_href:
     st.markdown(
         f"""
         <head>
-            <link rel="apple-touch-icon" href="{ios_icon_b64}">
-            <link rel="apple-touch-icon" sizes="120x120" href="{ios_icon_b64}">
+            <link rel="apple-touch-icon" href="{icon_href}">
+            <link rel="apple-touch-icon" sizes="120x120" href="{icon_href}">
             <meta name="apple-mobile-web-app-title" content="Ferrokrom AI">
             <meta name="apple-mobile-web-app-capable" content="yes">
             <meta name="apple-mobile-web-app-status-bar-style" content="black">
@@ -214,7 +217,11 @@ def main():
         st.sidebar.markdown("---")
         st.sidebar.caption("✅ iOS İkon Önizlemesi:")
         st.sidebar.image(icon_preview_obj, width=80)
-        st.sidebar.caption("iOS ana ekranında bu kare ikon görünmelidir.")
+        
+        if is_file_linked:
+             st.sidebar.success(f"✅ Başarılı: İkon Base64 yerine **{ICON_FILE_NAME}** dosyasına bağlandı.")
+        else:
+            st.sidebar.warning("⚠️ Base64 Yedekleme Kullanılıyor.")
     st.sidebar.markdown("---")
     
     selected_module = st.sidebar.radio(
@@ -288,7 +295,7 @@ def main():
     panel_health_index = 100 - calculated_stress
     arc_deviation_pct = (1.0 - arc_stability_factor) * 40.0 
 
-    # --- MODÜL İÇERİKLERİ ---
+    # --- MODÜL İÇERİKLERİ (Aynı kaldı) ---
     if selected_module == "1️⃣ AI Bakım ve Duruş Engelleme":
         st.title("🛡️ Modül 1: AI Bakım & Duruş Engelleme")
         col1, col2 = st.columns([2, 1])
