@@ -13,7 +13,7 @@ import plotly.express as px
 LOGO_PROCESS_SUCCESS = False
 LOGO_ERROR_MESSAGE = ""
 icon_preview_obj = None
-ICON_FILE_NAME = "apple-icon.png" # Yeni ikon dosya adı
+ICON_FILE_NAME = "apple-icon.png" # Streamlit klasörüne kaydedilecek ikon adı
 
 # ------------------------------------------------------------
 # 1. LOGO VE İKON İŞLEME (DOSYAYA KAYDETME İLE BASE64 BYPASS)
@@ -21,15 +21,16 @@ ICON_FILE_NAME = "apple-icon.png" # Yeni ikon dosya adı
 
 def process_logo_for_ios(image_path):
     """
-    Logoyu işler ve Base64 hatasını atlatmak için doğrudan dosyaya kaydeder.
+    Logoyu işler, 120x120 kare boyuta getirir ve Base64 sorununu aşmak için 
+    doğrudan ICON_FILE_NAME olarak diske kaydeder.
     """
     global LOGO_PROCESS_SUCCESS, LOGO_ERROR_MESSAGE, icon_preview_obj
-    is_file_linked = False # İkonun Base64 mi yoksa dosya yolu mu olduğunu belirler
+    is_file_linked = False 
     try:
         # 1. Logoyu aç
         img = Image.open(image_path)
         
-        # 2. Şeffaf (PNG) ise beyaz zemin ekle (Streamlit'in arka planıyla uyum için)
+        # 2. Şeffaf (PNG) ise beyaz zemin ekle
         if img.mode in ('RGBA', 'LA'):
             background = Image.new(img.mode[:-1], img.size, (255, 255, 255))
             background.paste(img, img.split()[-1])
@@ -44,7 +45,7 @@ def process_logo_for_ios(image_path):
         img_final_icon = img_square_cropped.resize((120, 120))
         icon_preview_obj = img_final_icon
 
-        # 5. KRİTİK: Base64 yerine diske kaydet ve dosya yolu döndür.
+        # 5. KRİTİK: Base64 yerine diske kaydet
         try:
             img_final_icon.save(ICON_FILE_NAME, format="PNG")
             LOGO_PROCESS_SUCCESS = True
@@ -52,9 +53,8 @@ def process_logo_for_ios(image_path):
             return ICON_FILE_NAME, img, is_file_linked # Dosya yolunu döndür
 
         except Exception as save_e:
-            LOGO_ERROR_MESSAGE = f"⚠️ Dosya kaydetme hatası: {save_e}. Base64 yedeklemesine geçiliyor..."
-            
-            # Kaydetme başarısız olursa Base64 üret (bu, zaten iOS'ta başarısız olan senaryo)
+            LOGO_ERROR_MESSAGE = f"⚠️ Dosya kaydetme hatası: {save_e}. Lütfen yetkileri kontrol edin."
+            # Kaydetme başarısız olursa yine de Base64 döndür (uyumsuz olsa bile)
             buffered = io.BytesIO()
             img_final_icon.save(buffered, format="PNG")
             img_str = base64.b64encode(buffered.getvalue()).decode()
@@ -68,7 +68,7 @@ def process_logo_for_ios(image_path):
         LOGO_ERROR_MESSAGE = f"⚠️ Logo işleme hatası: {e}"
         return None, None, False
 
-# Logoyu işlemeye çalış
+# logo.jpg kullanılıyor. Eğer logo.png kullanıyorsanız burayı değiştirin.
 icon_href, original_logo_obj, is_file_linked = process_logo_for_ios("logo.jpg")
 
 # ------------------------------------------------------------
@@ -83,11 +83,16 @@ st.set_page_config(
 
 # iOS Ana Ekran İkonu Enjeksiyonu
 if icon_href:
+    # KRİTİK DÜZELTME: Sürüm parametresi eklenerek (cache buster) iOS'un ikonu yenilemeye zorlanması
+    # icon_href burada ya "apple-icon.png" ya da Base64 verisidir.
+    cache_buster = "?v=1.0" if is_file_linked else ""
+    icon_link = f"{icon_href}{cache_buster}" 
+    
     st.markdown(
         f"""
         <head>
-            <link rel="apple-touch-icon" href="{icon_href}">
-            <link rel="apple-touch-icon" sizes="120x120" href="{icon_href}">
+            <link rel="apple-touch-icon" href="{icon_link}">
+            <link rel="apple-touch-icon" sizes="120x120" href="{icon_link}">
             <meta name="apple-mobile-web-app-title" content="Ferrokrom AI">
             <meta name="apple-mobile-web-app-capable" content="yes">
             <meta name="apple-mobile-web-app-status-bar-style" content="black">
@@ -105,7 +110,7 @@ except:
 
 
 # ------------------------------------------------------------
-# 3. VERİ VE SİMÜLASYON FONKSİYONLARI (Aynı kaldı)
+# 3. VERİ VE SİMÜLASYON FONKSİYONLARI (Değişmedi)
 # ------------------------------------------------------------
 @st.cache_data
 def generate_dummy_trend_data(n_points=50):
@@ -201,7 +206,7 @@ def generate_cfd_fields(power, arc_deviation_pct):
 
 
 # ------------------------------------------------------------
-# 4. UYGULAMA ANA AKIŞI
+# 4. UYGULAMA ANA AKIŞI (Değişmedi)
 # ------------------------------------------------------------
 def main():
     # --- LOGO DEBUG VE MENÜ BAŞLIĞI ---
@@ -295,7 +300,7 @@ def main():
     panel_health_index = 100 - calculated_stress
     arc_deviation_pct = (1.0 - arc_stability_factor) * 40.0 
 
-    # --- MODÜL İÇERİKLERİ (Aynı kaldı) ---
+    # --- MODÜL İÇERİKLERİ (Değişmedi) ---
     if selected_module == "1️⃣ AI Bakım ve Duruş Engelleme":
         st.title("🛡️ Modül 1: AI Bakım & Duruş Engelleme")
         col1, col2 = st.columns([2, 1])
@@ -340,68 +345,4 @@ def main():
             st.subheader("Fırın İçi Akışkan Dinamiği (CFD)")
             X, Y, T, Vx, Vy = generate_cfd_fields(input_data['power_kWh'], arc_deviation_pct)
             fig_cfd, ax = plt.subplots(figsize=(8, 5))
-            c = ax.contourf(X, Y, T, levels=25, cmap='inferno')
-            ax.quiver(X[::4, ::4], Y[::4, ::4], Vx[::4, ::4], Vy[::4, ::4], color='white', alpha=0.6)
-            fig_cfd.colorbar(c, label='Sıcaklık (°C)')
-            ax.set_title(f"Havuz ve Akış (Güç: {input_data['power_kWh']} kWh)")
-            st.pyplot(fig_cfd)
-
-    elif selected_module == "4️⃣ Alarm, Tavsiye ve KPI'lar":
-        st.title("🚨 Modül 4: Alarm Merkezi ve KPI")
-        k1, k2, k3 = st.columns(3)
-        k1.metric("Ark Stabilite Skoru", f"{arc_stability_factor*100:.1f}")
-        k2.metric("Döküm Süresi", f"{input_data.get('tap_time_min', 0):.1f} dk")
-        alarm = "YOK" if arc_deviation_pct < 20 else "VAR"
-        k3.metric("Aktif Alarm", alarm, delta_color="inverse" if alarm=="VAR" else "normal")
-        st.markdown("---")
-        st.subheader("Stabilite Geçmişi")
-        fig_stab = px.area(trend_df, x="Tarih", y="Arc_Stability_KPI", title="Ark Stabilizasyon Performansı")
-        st.plotly_chart(fig_stab, use_container_width=True)
-
-    elif selected_module == "5️⃣ AI Enterprise Level (EBITDA)":
-        st.title("🏢 Modül 5: Kurumsal İş Zekası (EBITDA)")
-        with st.expander("Finansal Hedef Ayarları", expanded=True):
-            col_e1, col_e2 = st.columns(2)
-            sales_price = col_e1.number_input("Hedef Satış Fiyatı ($/ton)", 500, 3000, 1500)
-            monthly_target = col_e2.number_input("Aylık Hedef Tonaj", 1000, 50000, 10000)
-            fixed_cost = st.number_input("Aylık Sabit Giderler ($)", 100000, 2000000, 500000)
-        
-        cost_elec = (input_data['power_kWh'] * (price_elec / 1000.0))
-        cost_oxy = input_data['oxygen_Nm3'] * price_oxy
-        cost_scrap = tonnage * price_scrap
-        cost_electrode = tonnage * 1.8 * price_electrode
-        unit_var_cost = (cost_scrap + cost_elec + cost_oxy + cost_electrode) / tonnage
-        
-        revenue = sales_price * monthly_target
-        var_cost_total = unit_var_cost * monthly_target
-        gross = revenue - var_cost_total
-        ebitda = gross - fixed_cost
-        
-        fig_water = go.Figure(go.Waterfall(
-            name="EBITDA", orientation="v",
-            measure=["relative", "relative", "total", "relative", "total"],
-            x=["Ciro", "Değişken Mal.", "Brüt Kar", "Sabit Gider", "EBITDA"],
-            y=[revenue, -var_cost_total, 0, -fixed_cost, 0],
-            text=[f"${revenue/1e6:.1f}M", f"-${var_cost_total/1e6:.1f}M", f"${gross/1e6:.1f}M", f"-${fixed_cost/1e6:.1f}M", f"${ebitda/1e6:.1f}M"],
-            connector={"line":{"color":"rgb(63, 63, 63)"}},
-        ))
-        st.plotly_chart(fig_water, use_container_width=True)
-        st.metric("EBITDA Marjı", f"%{(ebitda/revenue)*100:.1f}")
-
-    elif selected_module == "6️⃣ Scrap & Purchase Intelligence":
-        st.title("🧠 Modül 6: Hurda ve Satınalma Zekası")
-        uploaded_scrap = st.file_uploader("Hurda Verisi (CSV)", type=["csv"])
-        scrap_df = pd.read_csv(uploaded_scrap) if uploaded_scrap else generate_dummy_scrap_data()
-        with st.expander("Veri Önizleme"): st.dataframe(scrap_df.head(), use_container_width=True)
-        col_s1, col_s2 = st.columns(2)
-        with col_s1:
-            fig_scatter = px.scatter(scrap_df, x="Price_USD_t", y="Quality_Index", color="Supplier", size="Lot_tonnage", title="Tedarikçi Fiyat/Kalite Matrisi", hover_data=["Scrap_Type"])
-            st.plotly_chart(fig_scatter, use_container_width=True)
-        with col_s2:
-            scrap_df["Energy_Cost"] = scrap_df["kWh_per_t"] * (price_elec / 1000.0)
-            scrap_df["True_Cost"] = scrap_df["Price_USD_t"] + scrap_df["Energy_Cost"]
-            fig_bar = px.bar(scrap_df.groupby("Supplier")[["Price_USD_t", "True_Cost"]].mean().reset_index(), x="Supplier", y=["Price_USD_t", "True_Cost"], barmode="group", title="Nominal Fiyat vs Gerçek Maliyet")
-            st.plotly_chart(fig_bar, use_container_width=True)
-
-if __name__ == "__main__":
-    main()
+            c = ax.contourf(
