@@ -3,48 +3,68 @@ import base64
 import numpy as np
 import pandas as pd
 import streamlit as st
-from PIL import Image, ImageOps
+from PIL import Image
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import mean_absolute_error, r2_score
-from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 import plotly.express as px
 
+# --- Durum takibi için global değişkenler ---
+LOGO_PROCESS_SUCCESS = False
+LOGO_ERROR_MESSAGE = ""
+icon_preview_obj = None
+
 # ------------------------------------------------------------
-# 1. LOGO VE İKON İŞLEME (iOS UYUMLU - SOL ODAKLI)
+# 1. LOGO VE İKON İŞLEME (iOS UYUMLU - MUTLAK SOL KARE KESİM)
 # ------------------------------------------------------------
 
 def process_logo_for_ios(image_path):
     """
-    Logoyu iPhone ana ekranı için ideal kare boyuta (180x180) getirir.
-    ÖNEMLİ: Logoyu ortadan değil, EN SOLDAN (Şekil ve BG kısmından) keser.
+    Logoyu iPhone ana ekranı için ideal kare boyuta (120x120) getirir.
+    Logonun sol ucundan, yüksekliği kadar bir kare keserek (Şekil ve BG kısmı)
+    başka hiçbir yazının ikona girmemesini garanti eder.
     """
+    global LOGO_PROCESS_SUCCESS, LOGO_ERROR_MESSAGE, icon_preview_obj
     try:
-        # Logoyu aç
+        # 1. Logoyu aç
         img = Image.open(image_path)
         
-        # Şeffaf (PNG) ise beyaz zemin ekle
+        # 2. Şeffaf (PNG) ise beyaz zemin ekle
         if img.mode in ('RGBA', 'LA'):
             background = Image.new(img.mode[:-1], img.size, (255, 255, 255))
             background.paste(img, img.split()[-1])
             img = background
         
-        # --- KRİTİK DÜZELTME BURADA ---
-        # centering=(0.0, 0.5) -> Resmin SOL (0.0) tarafından başla, dikeyde ortala (0.5).
-        # Bu sayede sağdaki uzun yazıları atar, soldaki şekil ve BG'yi alır.
-        img_square = ImageOps.fit(img, (180, 180), centering=(0.0, 0.5))
+        # 3. Mutlak Sol Kare Kesim (Şekil + BG kısmı)
+        width, height = img.size
+        # Sol üst köşe (0, 0) dan başlayıp, yüksekliği kadar genişliğe sahip kare kes
+        left = 0
+        top = 0
+        right = height 
+        bottom = height
         
-        # PNG formatında hafızaya kaydet
+        img_square_cropped = img.crop((left, top, right, bottom))
+        
+        # 4. İkon boyutuna (120x120 daha kısa Base64 kodu için) küçült/büyüt
+        img_final_icon = img_square_cropped.resize((120, 120)) # <--- GÜNCELLENEN BOYUT
+        icon_preview_obj = img_final_icon
+
+        # 5. Base64 formatına çevir
         buffered = io.BytesIO()
-        img_square.save(buffered, format="PNG")
+        img_final_icon.save(buffered, format="PNG")
         img_str = base64.b64encode(buffered.getvalue()).decode()
         
+        LOGO_PROCESS_SUCCESS = True
         return f"data:image/png;base64,{img_str}", img
+        
+    except FileNotFoundError:
+        LOGO_ERROR_MESSAGE = f"❌ Hata: '{image_path}' dosyası bulunamadı. Lütfen dosya adını kontrol edin."
+        return None, None
     except Exception as e:
+        LOGO_ERROR_MESSAGE = f"⚠️ Logo işleme hatası: {e}"
         return None, None
 
-# Logoyu işle (Dosya adı logo.jpg olmalı)
+# logo.jpg kullanılıyor. Eğer logo.png kullanıyorsanız burayı değiştirin.
 ios_icon_b64, original_logo_obj = process_logo_for_ios("logo.jpg")
 
 # ------------------------------------------------------------
@@ -53,7 +73,8 @@ ios_icon_b64, original_logo_obj = process_logo_for_ios("logo.jpg")
 st.set_page_config(
     page_title="Ferrokrom AI",
     layout="wide",
-    page_icon=original_logo_obj if original_logo_obj else "⚒️",
+    # Sidebar ve tab ikonu için kırpılmış logoyu kullan
+    page_icon=icon_preview_obj if icon_preview_obj else "⚒️", 
     initial_sidebar_state="expanded"
 )
 
@@ -63,7 +84,7 @@ if ios_icon_b64:
         f"""
         <head>
             <link rel="apple-touch-icon" href="{ios_icon_b64}">
-            <link rel="apple-touch-icon" sizes="180x180" href="{ios_icon_b64}">
+            <link rel="apple-touch-icon" sizes="120x120" href="{ios_icon_b64}">
             <meta name="apple-mobile-web-app-title" content="Ferrokrom AI">
             <meta name="apple-mobile-web-app-capable" content="yes">
             <meta name="apple-mobile-web-app-status-bar-style" content="black">
@@ -75,16 +96,14 @@ if ios_icon_b64:
 # Streamlit Üst Bar Logosu
 try:
     if original_logo_obj:
-        # Üst barda da sadece ikon görünsün diye işlenmiş kare logoyu kullanabiliriz
-        # Ancak orjinal logoyu kullanmak daha şık durabilir, tercihen orjinal kalsın:
         st.logo("logo.jpg", icon_image="logo.jpg")
 except:
     pass
 
-# ------------------------------------------------------------
-# 3. VERİ VE SİMÜLASYON FONKSİYONLARI
-# ------------------------------------------------------------
 
+# ------------------------------------------------------------
+# 3. VERİ VE SİMÜLASYON FONKSİYONLARI (Aynı kaldı)
+# ------------------------------------------------------------
 @st.cache_data
 def generate_dummy_trend_data(n_points=50):
     dates = pd.date_range(start="2023-01-01", periods=n_points, freq="D")
@@ -155,7 +174,6 @@ def create_gauge_chart(value, title="Sıcaklık", min_v=1500, max_v=1750, target
     return fig
 
 def generate_cfd_fields(power, arc_deviation_pct):
-    """Bilimsel CFD Simülasyonu"""
     nx, ny = 50, 50
     x = np.linspace(0, 10, nx); y = np.linspace(0, 10, ny)
     X, Y = np.meshgrid(x, y)
@@ -178,17 +196,25 @@ def generate_cfd_fields(power, arc_deviation_pct):
     
     return X, Y, temp_field, V_x, V_y
 
+
 # ------------------------------------------------------------
 # 4. UYGULAMA ANA AKIŞI
 # ------------------------------------------------------------
 def main():
-    # --- SOL MENÜ BAŞLIĞI VE LOGO ---
+    # --- LOGO DEBUG VE MENÜ BAŞLIĞI ---
     if original_logo_obj:
         st.sidebar.image(original_logo_obj, use_container_width=True)
     else:
         st.sidebar.header("Ferrokrom AI")
+        
+    if LOGO_ERROR_MESSAGE:
+        st.sidebar.error(LOGO_ERROR_MESSAGE)
     
-    st.sidebar.markdown("**Akıllı Karar Destek Sistemi**")
+    if LOGO_PROCESS_SUCCESS and icon_preview_obj:
+        st.sidebar.markdown("---")
+        st.sidebar.caption("✅ iOS İkon Önizlemesi:")
+        st.sidebar.image(icon_preview_obj, width=80)
+        st.sidebar.caption("iOS ana ekranında bu kare ikon görünmelidir.")
     st.sidebar.markdown("---")
     
     selected_module = st.sidebar.radio(
@@ -231,16 +257,10 @@ def main():
     
     input_data = {}
 
-    # 1. Ark Stabilizasyonu
-    arc_stability_factor = st.sidebar.slider(
-        "⚡ Ark Stabilizasyon Faktörü (0-1)", 
-        0.0, 1.0, 0.90, 0.01,
-        help="1.0 = Tam Merkezde. Düşük değer = Yüksek Sapma."
-    )
+    arc_stability_factor = st.sidebar.slider("⚡ Ark Stabilizasyon Faktörü (0-1)", 0.0, 1.0, 0.90, 0.01)
     calculated_stress = (1.0 - arc_stability_factor) * 100
     input_data['Thermal_Stress_Index'] = calculated_stress
     
-    # 2. Proses Girdileri
     for col in X.columns:
         if col == 'power_kWh':
             input_data[col] = st.sidebar.slider("Güç (kWh)", 3000.0, 5000.0, 4000.0)
@@ -253,7 +273,6 @@ def main():
         elif col != 'Thermal_Stress_Index':
             input_data[col] = df[col].mean()
 
-    # 3. Fiyat Girdileri
     if selected_module in ["2️⃣ AI Girdi Maliyetleri Düşürme", "5️⃣ AI Enterprise Level (EBITDA)", "6️⃣ Scrap & Purchase Intelligence"]:
         st.sidebar.markdown("---")
         st.sidebar.subheader("💰 Piyasa Fiyatları")
@@ -269,76 +288,50 @@ def main():
     panel_health_index = 100 - calculated_stress
     arc_deviation_pct = (1.0 - arc_stability_factor) * 40.0 
 
-    # ------------------------------------------------------------------
-    # MODÜL 1: AI BAKIM
-    # ------------------------------------------------------------------
+    # --- MODÜL İÇERİKLERİ ---
     if selected_module == "1️⃣ AI Bakım ve Duruş Engelleme":
         st.title("🛡️ Modül 1: AI Bakım & Duruş Engelleme")
         col1, col2 = st.columns([2, 1])
-        
         with col1:
             st.subheader("Panel Sıcaklık Trendi")
-            fig_trend = px.line(trend_df, x="Tarih", y="Panel_Temp_Avg", title="Panel Çıkış Suyu Sıcaklığı (Aşınma Takibi)")
+            fig_trend = px.line(trend_df, x="Tarih", y="Panel_Temp_Avg", title="Panel Çıkış Suyu Sıcaklığı")
             fig_trend.add_hline(y=45, line_dash="dot", annotation_text="Limit", line_color="red")
             st.plotly_chart(fig_trend, use_container_width=True)
-            
         with col2:
             st.subheader("Panel Sağlık Skoru")
-            fig_health = go.Figure(go.Indicator(
-                mode="gauge+number", value=panel_health_index,
-                title={'text': "Sağlık"},
-                gauge={'axis': {'range': [0, 100]}, 'bar': {'color': "green" if panel_health_index > 50 else "red"}}
-            ))
+            fig_health = go.Figure(go.Indicator(mode="gauge+number", value=panel_health_index, title={'text': "Sağlık"}, gauge={'axis': {'range': [0, 100]}, 'bar': {'color': "green" if panel_health_index > 50 else "red"}}))
             fig_health.update_layout(height=250)
             st.plotly_chart(fig_health, use_container_width=True)
-            
-            if panel_health_index < 40:
-                st.error("🚨 **KRİTİK:** Yüksek termal stres! Panel delinme riski.")
-            else:
-                st.success("✅ Sistem Stabil.")
+            if panel_health_index < 40: st.error("🚨 **KRİTİK:** Yüksek termal stres!")
+            else: st.success("✅ Sistem Stabil.")
 
-    # ------------------------------------------------------------------
-    # MODÜL 2: GİRDİ MALİYETLERİ
-    # ------------------------------------------------------------------
     elif selected_module == "2️⃣ AI Girdi Maliyetleri Düşürme":
         st.title("💰 Modül 2: Girdi Maliyetleri Optimizasyonu")
-        
         cost_elec = (input_data['power_kWh'] * (price_elec / 1000.0))
         cost_oxy = input_data['oxygen_Nm3'] * price_oxy
         cost_scrap = tonnage * price_scrap
         cost_electrode = tonnage * 1.8 * price_electrode
         total_cost = cost_scrap + cost_elec + cost_oxy + cost_electrode
         unit_cost = total_cost / tonnage
-
         c1, c2 = st.columns(2)
         with c1:
             st.metric("Toplam Döküm Maliyeti", f"${total_cost:,.2f}")
             st.metric("Birim Maliyet ($/t)", f"${unit_cost:.2f}")
         with c2:
-            df_cost = pd.DataFrame({
-                "Kalem": ["Hurda", "Elektrik", "Oksijen", "Elektrot"],
-                "Maliyet": [cost_scrap, cost_elec, cost_oxy, cost_electrode]
-            })
+            df_cost = pd.DataFrame({"Kalem": ["Hurda", "Elektrik", "Oksijen", "Elektrot"], "Maliyet": [cost_scrap, cost_elec, cost_oxy, cost_electrode]})
             fig_pie = px.pie(df_cost, values='Maliyet', names='Kalem', title="Maliyet Kırılımı", hole=0.4)
             st.plotly_chart(fig_pie, use_container_width=True)
 
-    # ------------------------------------------------------------------
-    # MODÜL 3: KARAR DESTEK
-    # ------------------------------------------------------------------
     elif selected_module == "3️⃣ Karar Destek Modülü (Process)":
         st.title("📈 Modül 3: Karar Destek ve Dijital İkiz")
-        
         c_left, c_right = st.columns([1, 2])
         with c_left:
             st.subheader("Sıcaklık Tahmini")
             st.plotly_chart(create_gauge_chart(prediction), use_container_width=True)
             st.metric("Ark Sapma Yüzdesi", f"%{arc_deviation_pct:.1f}", delta_color="inverse" if arc_deviation_pct > 20 else "normal")
-            
         with c_right:
             st.subheader("Fırın İçi Akışkan Dinamiği (CFD)")
-            st.info("Manyetik sapma ve sıvı metal havuzunun şekli.")
             X, Y, T, Vx, Vy = generate_cfd_fields(input_data['power_kWh'], arc_deviation_pct)
-            
             fig_cfd, ax = plt.subplots(figsize=(8, 5))
             c = ax.contourf(X, Y, T, levels=25, cmap='inferno')
             ax.quiver(X[::4, ::4], Y[::4, ::4], Vx[::4, ::4], Vy[::4, ::4], color='white', alpha=0.6)
@@ -346,9 +339,6 @@ def main():
             ax.set_title(f"Havuz ve Akış (Güç: {input_data['power_kWh']} kWh)")
             st.pyplot(fig_cfd)
 
-    # ------------------------------------------------------------------
-    # MODÜL 4: ALARM & KPI
-    # ------------------------------------------------------------------
     elif selected_module == "4️⃣ Alarm, Tavsiye ve KPI'lar":
         st.title("🚨 Modül 4: Alarm Merkezi ve KPI")
         k1, k2, k3 = st.columns(3)
@@ -356,24 +346,19 @@ def main():
         k2.metric("Döküm Süresi", f"{input_data.get('tap_time_min', 0):.1f} dk")
         alarm = "YOK" if arc_deviation_pct < 20 else "VAR"
         k3.metric("Aktif Alarm", alarm, delta_color="inverse" if alarm=="VAR" else "normal")
-        
         st.markdown("---")
         st.subheader("Stabilite Geçmişi")
         fig_stab = px.area(trend_df, x="Tarih", y="Arc_Stability_KPI", title="Ark Stabilizasyon Performansı")
         st.plotly_chart(fig_stab, use_container_width=True)
 
-    # ------------------------------------------------------------------
-    # MODÜL 5: AI ENTERPRISE (EBITDA)
-    # ------------------------------------------------------------------
     elif selected_module == "5️⃣ AI Enterprise Level (EBITDA)":
         st.title("🏢 Modül 5: Kurumsal İş Zekası (EBITDA)")
-        
         with st.expander("Finansal Hedef Ayarları", expanded=True):
             col_e1, col_e2 = st.columns(2)
             sales_price = col_e1.number_input("Hedef Satış Fiyatı ($/ton)", 500, 3000, 1500)
             monthly_target = col_e2.number_input("Aylık Hedef Tonaj", 1000, 50000, 10000)
             fixed_cost = st.number_input("Aylık Sabit Giderler ($)", 100000, 2000000, 500000)
-
+        
         cost_elec = (input_data['power_kWh'] * (price_elec / 1000.0))
         cost_oxy = input_data['oxygen_Nm3'] * price_oxy
         cost_scrap = tonnage * price_scrap
@@ -394,49 +379,21 @@ def main():
             connector={"line":{"color":"rgb(63, 63, 63)"}},
         ))
         st.plotly_chart(fig_water, use_container_width=True)
-        
         st.metric("EBITDA Marjı", f"%{(ebitda/revenue)*100:.1f}")
 
-    # ------------------------------------------------------------------
-    # MODÜL 6: SCRAP INTELLIGENCE
-    # ------------------------------------------------------------------
     elif selected_module == "6️⃣ Scrap & Purchase Intelligence":
         st.title("🧠 Modül 6: Hurda ve Satınalma Zekası")
-        
         uploaded_scrap = st.file_uploader("Hurda Verisi (CSV)", type=["csv"])
-        if uploaded_scrap:
-            scrap_df = pd.read_csv(uploaded_scrap)
-        else:
-            scrap_df = generate_dummy_scrap_data()
-            st.info("Demo hurda verisi kullanılıyor.")
-        
-        with st.expander("Veri Önizleme"):
-            st.dataframe(scrap_df.head(), use_container_width=True)
-        
+        scrap_df = pd.read_csv(uploaded_scrap) if uploaded_scrap else generate_dummy_scrap_data()
+        with st.expander("Veri Önizleme"): st.dataframe(scrap_df.head(), use_container_width=True)
         col_s1, col_s2 = st.columns(2)
         with col_s1:
-            fig_scatter = px.scatter(
-                scrap_df, 
-                x="Price_USD_t", 
-                y="Quality_Index", 
-                color="Supplier", 
-                size="Lot_tonnage", 
-                title="Tedarikçi Fiyat/Kalite Matrisi",
-                hover_data=["Scrap_Type"]
-            )
+            fig_scatter = px.scatter(scrap_df, x="Price_USD_t", y="Quality_Index", color="Supplier", size="Lot_tonnage", title="Tedarikçi Fiyat/Kalite Matrisi", hover_data=["Scrap_Type"])
             st.plotly_chart(fig_scatter, use_container_width=True)
-            
         with col_s2:
             scrap_df["Energy_Cost"] = scrap_df["kWh_per_t"] * (price_elec / 1000.0)
             scrap_df["True_Cost"] = scrap_df["Price_USD_t"] + scrap_df["Energy_Cost"]
-            
-            fig_bar = px.bar(
-                scrap_df.groupby("Supplier")[["Price_USD_t", "True_Cost"]].mean().reset_index(),
-                x="Supplier",
-                y=["Price_USD_t", "True_Cost"],
-                barmode="group",
-                title="Nominal Fiyat vs Gerçek Maliyet (True Cost)"
-            )
+            fig_bar = px.bar(scrap_df.groupby("Supplier")[["Price_USD_t", "True_Cost"]].mean().reset_index(), x="Supplier", y=["Price_USD_t", "True_Cost"], barmode="group", title="Nominal Fiyat vs Gerçek Maliyet")
             st.plotly_chart(fig_bar, use_container_width=True)
 
 if __name__ == "__main__":
