@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 from PIL import Image
+# Diğer importlar (RandomForest, Plotly, Matplotlib vb.) aynı kalmıştır.
 from sklearn.ensemble import RandomForestRegressor
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
@@ -13,8 +14,8 @@ import plotly.express as px
 LOGO_PROCESS_SUCCESS = False
 LOGO_ERROR_MESSAGE = ""
 icon_preview_obj = None
-# 🎯 KRİTİK DEĞİŞİKLİK 1: YENİ DOSYA ADI VE VERSİYON (Önbellek sıfırlama)
-ICON_FILE_NAME = "ferrokrom-icon-final.png" 
+# KRİTİK DEĞİŞİKLİK 1: Yeni ikon dosya adı ve uzantısı (cache buster için versiyon 3.0)
+ICON_FILE_NAME = "ferrokrom-icon-v3.png" 
 
 # ------------------------------------------------------------
 # 1. LOGO VE İKON İŞLEME (PNG OLARAK DİSKE KAYDETME)
@@ -46,6 +47,7 @@ def process_logo_for_ios(image_path):
 
         # 5. KRİTİK: Dosyayı PNG olarak kaydet
         try:
+            # Streamlit'in uygulamanın kök dizininden dosyayı sunacağını varsayıyoruz
             img_final_icon.save(ICON_FILE_NAME, format="PNG") 
             LOGO_PROCESS_SUCCESS = True
             is_file_linked = True
@@ -82,8 +84,8 @@ st.set_page_config(
 
 # iOS Ana Ekran İkonu Enjeksiyonu
 if icon_href:
-    # 🎯 KRİTİK DEĞİŞİKLİK 2: Cache buster sürümü V4.0 olarak güncellendi
-    cache_buster = "?v=4.0" if is_file_linked else ""
+    # KRİTİK DÜZELTME: Sürüm parametresi v=3.0 yapıldı
+    cache_buster = "?v=3.0" if is_file_linked else ""
     icon_link = f"{icon_href}{cache_buster}" 
     
     st.markdown(
@@ -106,9 +108,11 @@ try:
 except:
     pass
 
-# ------------------------------------------------------------
-# 3. VERİ VE SİMÜLASYON FONKSİYONLARI (Aynı kaldı)
-# ------------------------------------------------------------
+# --- 3. Veri, Simülasyon ve Uygulama Akışı Kodunun Geri Kalanı ---
+
+# Buradan sonraki tüm fonksiyon ve ana akış (main) kodu (feature_engineering, generate_dummy_data, main, vb.) 
+# önceki gönderilen kodla aynıdır ve buraya eklenmiştir. 
+# ... (Kodun geri kalanı buraya eklenir, önceki gönderilen tam kod ile aynıdır)
 @st.cache_data
 def generate_dummy_trend_data(n_points=50):
     dates = pd.date_range(start="2023-01-01", periods=n_points, freq="D")
@@ -202,9 +206,6 @@ def generate_cfd_fields(power, arc_deviation_pct):
     return X, Y, temp_field, V_x, V_y
 
 
-# ------------------------------------------------------------
-# 4. UYGULAMA ANA AKIŞI
-# ------------------------------------------------------------
 def main():
     # --- LOGO DEBUG VE MENÜ BAŞLIĞI ---
     if original_logo_obj:
@@ -297,7 +298,7 @@ def main():
     panel_health_index = 100 - calculated_stress
     arc_deviation_pct = (1.0 - arc_stability_factor) * 40.0 
 
-    # --- MODÜL İÇERİKLERİ (Aynı kaldı) ---
+    # --- MODÜL İÇERİKLERİ ---
     if selected_module == "1️⃣ AI Bakım ve Duruş Engelleme":
         st.title("🛡️ Modül 1: AI Bakım & Duruş Engelleme")
         col1, col2 = st.columns([2, 1])
@@ -407,3 +408,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# --- Kod Sonu ---
