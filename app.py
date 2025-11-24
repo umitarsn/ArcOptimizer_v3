@@ -13,11 +13,11 @@ import plotly.express as px
 LOGO_PROCESS_SUCCESS = False
 LOGO_ERROR_MESSAGE = ""
 icon_preview_obj = None
-# KRİTİK DEĞİŞİKLİK 1: Yeni ikon dosya adı ve uzantısı PNG olarak kesinleştirildi
-ICON_FILE_NAME = "ferrokrom-icon-v2.png" 
+# 🎯 KRİTİK DEĞİŞİKLİK 1: YENİ DOSYA ADI VE VERSİYON (Önbellek sıfırlama)
+ICON_FILE_NAME = "ferrokrom-icon-final.png" 
 
 # ------------------------------------------------------------
-# 1. LOGO VE İKON İŞLEME (DOSYAYA KAYDETME İLE BASE64 BYPASS)
+# 1. LOGO VE İKON İŞLEME (PNG OLARAK DİSKE KAYDETME)
 # ------------------------------------------------------------
 
 def process_logo_for_ios(image_path):
@@ -27,11 +27,9 @@ def process_logo_for_ios(image_path):
     global LOGO_PROCESS_SUCCESS, LOGO_ERROR_MESSAGE, icon_preview_obj
     is_file_linked = False 
     try:
-        # 1. Logoyu aç
-        # image_path = "logo.jpg" olduğunu varsayıyoruz.
         img = Image.open(image_path)
         
-        # 2. Şeffaf (PNG) ise beyaz zemin ekle (PNG formatı zorunlu)
+        # 2. Şeffaf (PNG) ise beyaz zemin ekle
         if img.mode in ('RGBA', 'LA'):
             background = Image.new(img.mode[:-1], img.size, (255, 255, 255))
             background.paste(img, img.split()[-1])
@@ -46,16 +44,15 @@ def process_logo_for_ios(image_path):
         img_final_icon = img_square_cropped.resize((120, 120))
         icon_preview_obj = img_final_icon
 
-        # 5. KRİTİK: Base64 yerine diske kaydet (format PNG olmalı)
+        # 5. KRİTİK: Dosyayı PNG olarak kaydet
         try:
-            img_final_icon.save(ICON_FILE_NAME, format="PNG")
+            img_final_icon.save(ICON_FILE_NAME, format="PNG") 
             LOGO_PROCESS_SUCCESS = True
             is_file_linked = True
             return ICON_FILE_NAME, img, is_file_linked 
 
         except Exception as save_e:
             LOGO_ERROR_MESSAGE = f"⚠️ Dosya kaydetme hatası: {save_e}. Lütfen yetkileri kontrol edin."
-            
             # Base64 yedeklemesi
             buffered = io.BytesIO()
             img_final_icon.save(buffered, format="PNG")
@@ -64,18 +61,17 @@ def process_logo_for_ios(image_path):
             return f"data:image/png;base64,{img_str}", img, is_file_linked
         
     except FileNotFoundError:
-        # Girdi dosyası "logo.jpg" bulunamazsa hata verir
         LOGO_ERROR_MESSAGE = f"❌ Hata: '{image_path}' dosyası bulunamadı. Lütfen dosya adını kontrol edin."
         return None, None, False
     except Exception as e:
         LOGO_ERROR_MESSAGE = f"⚠️ Logo işleme hatası: {e}"
         return None, None, False
 
-# logo.jpg kullanılıyor.
+# logo.jpg'yi girdi olarak kullan
 icon_href, original_logo_obj, is_file_linked = process_logo_for_ios("logo.jpg")
 
 # ------------------------------------------------------------
-# 2. SAYFA AYARLARI
+# 2. SAYFA AYARLARI VE HTML ENJEKSİYONU
 # ------------------------------------------------------------
 st.set_page_config(
     page_title="Ferrokrom AI",
@@ -86,8 +82,8 @@ st.set_page_config(
 
 # iOS Ana Ekran İkonu Enjeksiyonu
 if icon_href:
-    # KRİTİK DEĞİŞİKLİK 2: Cache buster sürümünü artırıyoruz
-    cache_buster = "?v=2.0" if is_file_linked else ""
+    # 🎯 KRİTİK DEĞİŞİKLİK 2: Cache buster sürümü V4.0 olarak güncellendi
+    cache_buster = "?v=4.0" if is_file_linked else ""
     icon_link = f"{icon_href}{cache_buster}" 
     
     st.markdown(
@@ -109,7 +105,6 @@ try:
         st.logo("logo.jpg", icon_image="logo.jpg")
 except:
     pass
-
 
 # ------------------------------------------------------------
 # 3. VERİ VE SİMÜLASYON FONKSİYONLARI (Aynı kaldı)
