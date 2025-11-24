@@ -11,7 +11,7 @@ from sklearn.ensemble import RandomForestRegressor
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 import plotly.express as px
-import math 
+import math # Bazı matematiksel işlemler için
 
 # --- Durum takibi için global değişkenler ---
 LOGO_PROCESS_SUCCESS = False
@@ -24,37 +24,43 @@ icon_preview_obj = None
 
 def process_logo_for_ios(image_path):
     """
-    Logoyu işler, 192x192 kare boyuta getirir ve PURE Base64 string olarak döndürür.
-    Renk modunu ve kesme mantığını sağlamlaştırdık.
+    Logoyu işler, 120x120 kare boyuta getirir ve PURE Base64 string olarak döndürür.
+    Disk kaydetme denemesi kaldırılmıştır.
     """
     global LOGO_PROCESS_SUCCESS, LOGO_ERROR_MESSAGE, icon_preview_obj
     try:
         # Kodun ARADIĞI KAYNAK dosya: logo.jpg
-        # RGB'ye çevirerek görsel hataları minimize ediyoruz
-        img = Image.open(image_path).convert("RGB") 
+        img = Image.open(image_path)
         
         # 1. Şeffaf (PNG) ise beyaz zemin ekle
         if img.mode in ('RGBA', 'LA'):
-            background = Image.new('RGB', img.size, (255, 255, 255))
-            background.paste(img, mask=img.split()[-1])
+            background = Image.new(img.mode[:-1], img.size, (255, 255, 255))
+            background.paste(img, img.split()[-1])
             img = background
         
-        # 2. Mutlak Sol Kare Kesim 
+        # 2. Mutlak Sol Kare Kesim (Logo solda olduğu için soldan kare kesim)
         width, height = img.size
-        side = min(width, height) 
-        # Soldan kare kesim her zaman doğru çalışır: (0, 0, kısa kenar, kısa kenar)
-        img_square_cropped = img.crop((0, 0, side, side)) 
+        side = min(width, height)
+        left = 0
+        top = 0
+        right = side
+        bottom = side
         
-        # 3. İkon boyutuna küçült/büyüt 
-        # st.image önizlemesi için 120x120
-        icon_preview_obj = img_square_cropped.resize((120, 120)) 
+        # Eğer resim yatay ise (width > height), kareyi soldan kes.
+        if width > height:
+             img_square_cropped = img.crop((left, top, height, bottom))
+        # Eğer resim dikey veya kare ise
+        else:
+             img_square_cropped = img.crop((left, top, right, bottom))
         
-        # iOS ve Favicon için 192x192 (Base64 enjeksiyonunu daha sağlam yapar)
-        img_final_base64 = img_square_cropped.resize((192, 192)) 
+        # 3. İkon boyutuna (120x120) küçült/büyüt
+        img_final_icon = img_square_cropped.resize((120, 120))
+        icon_preview_obj = img_final_icon
 
         # 4. KRİTİK: Base64 stringini oluştur
         buffered = io.BytesIO()
-        img_final_base64.save(buffered, format="PNG") 
+        # İkon olarak kullanılacağı için PNG formatında kaydedilir
+        img_final_icon.save(buffered, format="PNG") 
         img_str = base64.b64encode(buffered.getvalue()).decode()
         
         LOGO_PROCESS_SUCCESS = True
@@ -90,11 +96,8 @@ if icon_href:
     st.markdown(
         f"""
         <head>
-            <link rel="icon" type="image/png" sizes="192x192" href="{icon_href}">
-            
+            <link rel="apple-touch-icon" href="{icon_href}">
             <link rel="apple-touch-icon" sizes="120x120" href="{icon_href}">
-            <link rel="apple-touch-icon" sizes="180x180" href="{icon_href}">
-            
             <meta name="apple-mobile-web-app-title" content="Ferrokrom AI - {cache_buster_time}">
             <meta name="apple-mobile-web-app-capable" content="yes">
             <meta name="apple-mobile-web-app-status-bar-style" content="black">
@@ -219,8 +222,7 @@ def main():
     if LOGO_PROCESS_SUCCESS and icon_preview_obj:
         st.sidebar.markdown("---")
         st.sidebar.caption("✅ iOS İkon Önizlemesi:")
-        # Bu kısım artık daha sağlam çalışmalı
-        st.sidebar.image(icon_preview_obj, width=80) 
+        st.sidebar.image(icon_preview_obj, width=80)
         st.sidebar.success("✅ Başarılı: İkon PURE Base64 ile enjekte edildi.")
     st.sidebar.markdown("---")
     
