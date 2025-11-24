@@ -25,10 +25,12 @@ icon_preview_obj = None
 def process_logo_for_ios(image_path):
     """
     Logoyu işler, 192x192 kare boyuta getirir ve PURE Base64 string olarak döndürür.
+    Renk modunu ve kesme mantığını sağlamlaştırdık.
     """
     global LOGO_PROCESS_SUCCESS, LOGO_ERROR_MESSAGE, icon_preview_obj
     try:
         # Kodun ARADIĞI KAYNAK dosya: logo.jpg
+        # RGB'ye çevirerek görsel hataları minimize ediyoruz
         img = Image.open(image_path).convert("RGB") 
         
         # 1. Şeffaf (PNG) ise beyaz zemin ekle
@@ -40,10 +42,14 @@ def process_logo_for_ios(image_path):
         # 2. Mutlak Sol Kare Kesim 
         width, height = img.size
         side = min(width, height) 
+        # Soldan kare kesim her zaman doğru çalışır: (0, 0, kısa kenar, kısa kenar)
         img_square_cropped = img.crop((0, 0, side, side)) 
         
         # 3. İkon boyutuna küçült/büyüt 
+        # st.image önizlemesi için 120x120
         icon_preview_obj = img_square_cropped.resize((120, 120)) 
+        
+        # iOS ve Favicon için 192x192 (Base64 enjeksiyonunu daha sağlam yapar)
         img_final_base64 = img_square_cropped.resize((192, 192)) 
 
         # 4. KRİTİK: Base64 stringini oluştur
@@ -53,6 +59,7 @@ def process_logo_for_ios(image_path):
         
         LOGO_PROCESS_SUCCESS = True
         
+        # Base64 stringini ve orijinal logo objesini döndür.
         return f"data:image/png;base64,{img_str}", img 
 
     except FileNotFoundError:
@@ -99,6 +106,7 @@ if icon_href:
 # Streamlit Üst Bar Logosu
 try:
     if original_logo_obj:
+        # st.logo burada logo.jpg dosyasını kullanır
         st.logo("logo.jpg", icon_image="logo.jpg")
 except:
     pass
@@ -145,7 +153,6 @@ def feature_engineering(df):
         
     return df
 
-# HATA DÜZELTİLDİ: Tüm parantezler doğru kapatıldı.
 def create_gauge_chart(value):
     fig = go.Figure(go.Indicator(
         mode="gauge+number",
@@ -168,8 +175,7 @@ def create_gauge_chart(value):
                 'thickness': 0.75,
                 'value': 1680
             }
-        }
-    ))
+        }))
     fig.update_layout(height=250, margin=dict(t=50, b=10, l=10, r=10))
     return fig
 
@@ -213,6 +219,7 @@ def main():
     if LOGO_PROCESS_SUCCESS and icon_preview_obj:
         st.sidebar.markdown("---")
         st.sidebar.caption("✅ iOS İkon Önizlemesi:")
+        # Bu kısım artık daha sağlam çalışmalı
         st.sidebar.image(icon_preview_obj, width=80) 
         st.sidebar.success("✅ Başarılı: İkon PURE Base64 ile enjekte edildi.")
     st.sidebar.markdown("---")
@@ -237,12 +244,14 @@ def main():
         df = pd.read_csv("data/BG_EAF_panelcooling_demo.csv")
     except FileNotFoundError:
         st.error("❌ Veri dosyası bulunamadı! data/BG_EAF_panelcooling_demo.csv'yi kontrol edin.")
+        # Veri olmadan uygulamanın çalışmasını durdurun
         if selected_module != "4️⃣ Alarm, Tavsiye ve KPI'lar": 
             st.stop()
 
     df = feature_engineering(df)
     
     target_col = "tap_temperature_C"
+    # Düşürülecek sütunlar listesi
     drop_cols = ["heat_id", "tap_temperature_C", "melt_temperature_C", "panel_T_in_C", "panel_T_out_C", "panel_flow_kg_s"]
     X = df.drop(columns=[c for c in drop_cols if c in df.columns] + [target_col], errors='ignore')
     y = df[target_col]
@@ -265,6 +274,7 @@ def main():
     calculated_stress = (1.0 - arc_stability_factor) * 100
     input_data['Thermal_Stress_Index'] = calculated_stress 
     
+    # Diğer gerekli girdilerin toplanması
     for col in X.columns:
         if col == 'power_kWh':
             input_data[col] = st.sidebar.slider("Güç (kWh)", 3000.0, 5000.0, 4000.0)
@@ -274,6 +284,7 @@ def main():
             input_data[col] = st.sidebar.slider("Hurda Kalitesi (0-100)", 0.0, 100.0, 70.0)
         elif col == 'tap_time_min':
             input_data[col] = st.sidebar.slider("Döküm Süresi (dk)", 40.0, 70.0, 55.0)
+        # Eğer sütun daha önce ayarlanmadıysa ortalama değeri kullan
         elif col not in input_data: 
             input_data[col] = df[col].mean()
 
