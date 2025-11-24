@@ -35,6 +35,7 @@ def process_logo_for_ios(image_path):
         
         # 1. Şeffaf (PNG) ise beyaz zemin ekle
         if img.mode in ('RGBA', 'LA'):
+            # PIL'de maske kullanarak beyaz zemin ekleme
             background = Image.new('RGB', img.size, (255, 255, 255))
             background.paste(img, mask=img.split()[-1])
             img = background
@@ -142,20 +143,4 @@ def generate_dummy_scrap_data():
 def feature_engineering(df):
     if 'panel_T_out_C' in df.columns and 'panel_T_in_C' in df.columns:
         df['Panel_Temp_Delta_C'] = df['panel_T_out_C'] - df['panel_T_in_C']
-    if 'power_kWh' in df.columns and 'tap_time_min' in df.columns:
-        df['Energy_Rate'] = df['power_kWh'] / df['tap_time_min']
-    
-    # Simülasyon için eksik sütunları ortalama ile doldur
-    if 'Scrap_Quality_Index' not in df.columns:
-        df['Scrap_Quality_Index'] = 80
-    if 'Thermal_Stress_Index' not in df.columns:
-        df['Thermal_Stress_Index'] = 10
-        
-    return df
-
-def create_gauge_chart(value):
-    fig = go.Figure(go.Indicator(
-        mode="gauge+number",
-        value=value,
-        domain={'x': [0, 1], 'y': [0, 1]},
-        title={'text': "Tahmini Döküm Sıcaklığı (°C)"},
+    if 'power_kWh' in df.columns and '
