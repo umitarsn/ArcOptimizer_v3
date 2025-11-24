@@ -29,10 +29,10 @@ def process_logo_for_ios(image_path):
     """
     global LOGO_PROCESS_SUCCESS, LOGO_ERROR_MESSAGE, icon_preview_obj
     try:
-        # Kodun ARADIĞI KAYNAK dosya: logo.jpg
+        # Kodun ARADIĞI KAYNAK dosya: logo.jpg (veya GitHub'daki tam ad neyse)
         img = Image.open(image_path)
         
-        # 1. Şeffaf (PNG) ise beyaz zemin ekle
+        # 1. Şeffaf (PNG) ise beyaz zemin ekle (JPG olduğundan genellikle gerekmez, ama kontrol iyi)
         if img.mode in ('RGBA', 'LA'):
             background = Image.new(img.mode[:-1], img.size, (255, 255, 255))
             background.paste(img, img.split()[-1])
@@ -40,7 +40,7 @@ def process_logo_for_ios(image_path):
         
         # 2. Mutlak Sol Kare Kesim (Logo solda olduğu için soldan kare kesim)
         width, height = img.size
-        side = min(width, height)
+        side = min(width, height) # Kısa kenarı al
         left = 0
         top = 0
         right = side
@@ -109,7 +109,6 @@ if icon_href:
 # Streamlit Üst Bar Logosu
 try:
     if original_logo_obj:
-        # st.logo burada logo.jpg dosyasını kullanır
         st.logo("logo.jpg", icon_image="logo.jpg")
 except:
     pass
@@ -242,23 +241,18 @@ def main():
 
     # --- VERİ YÜKLEME ---
     try:
-        # Veri dosyasının doğru yolunu kontrol edin
         df = pd.read_csv("data/BG_EAF_panelcooling_demo.csv")
     except FileNotFoundError:
         st.error("❌ Veri dosyası bulunamadı! data/BG_EAF_panelcooling_demo.csv'yi kontrol edin.")
-        # Veri olmadan uygulamanın çalışmasını durdurun
-        if selected_module != "4️⃣ Alarm, Tavsiye ve KPI'lar": 
-            st.stop()
+        st.stop()
 
     df = feature_engineering(df)
     
     target_col = "tap_temperature_C"
-    # Düşürülecek sütunlar listesi
     drop_cols = ["heat_id", "tap_temperature_C", "melt_temperature_C", "panel_T_in_C", "panel_T_out_C", "panel_flow_kg_s"]
     X = df.drop(columns=[c for c in drop_cols if c in df.columns] + [target_col], errors='ignore')
     y = df[target_col]
     
-    # Makine öğrenimi modelini eğit
     model = RandomForestRegressor(n_estimators=50, random_state=42)
     model.fit(X, y)
     
@@ -274,7 +268,7 @@ def main():
 
     arc_stability_factor = st.sidebar.slider("⚡ Ark Stabilizasyon Faktörü (0-1)", 0.0, 1.0, 0.90, 0.01)
     calculated_stress = (1.0 - arc_stability_factor) * 100
-    input_data['Thermal_Stress_Index'] = calculated_stress 
+    input_data['Thermal_Stress_Index'] = calculated_stress # Feature Engineering'de eklediğimiz sütun
     
     # Diğer gerekli girdilerin toplanması
     for col in X.columns:
