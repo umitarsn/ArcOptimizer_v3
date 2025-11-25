@@ -1,7 +1,9 @@
+import io
+import base64
 import numpy as np
 import pandas as pd
 import streamlit as st
-from PIL import Image # Sadece Image yeterli
+from PIL import Image
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 import plotly.express as px
@@ -9,16 +11,46 @@ from sklearn.ensemble import RandomForestRegressor
 # Diğer gerekli importlar
 
 # ------------------------------------------------------------
-# 1. LOGO VE İKON İŞLEME
+# 1. LOGO VE İKON İŞLEME (BASE64 İLE GARANTİLİ IOS ÇÖZÜMÜ)
+#    Bu Base64 kodu, RailWay/Streamlit statik dosya çakışmasını atlar.
 # ------------------------------------------------------------
 
-# logo.jpg'yi PIL nesnesi olarak yükleyin (Yan panel ve favicon için)
+base64_icon = None
+favicon_image = None
+
 try:
+    # 1. logo.jpg dosyasını aç
     im = Image.open("logo.jpg")
+    favicon_image = im
+
+    # 2. iOS için kare (180x180) versiyonunu oluştur
+    img_ios = im.copy()
+    width, height = img_ios.size
+    
+    # Sol kenardan, resmin yüksekliği kadar kare kesme (BG kısmı garanti)
+    img_ios = img_ios.crop((0, 0, height, height)) 
+    img_ios = img_ios.resize((180, 180)) 
+    
+    # 3. Görüntüyü Base64'e dönüştür
+    buff = io.BytesIO()
+    img_ios.save(buff, format="PNG")
+    base64_icon = base64.b64encode(buff.getvalue()).decode("utf-8")
+    
+    # 4. Streamlit'in HTML'ine ZORLA ENJEKSİYON (st.set_page_config'ten önce çalışır)
+    # Bu, <head> etiketine data URI olarak eklenir.
+    st.markdown(f"""
+    <link rel="apple-touch-icon" 
+    sizes="180x180" 
+    href="data:image/png;base64,{base64_icon}">
+    """, unsafe_allow_html=True)
+
 except FileNotFoundError:
-    im = None
-except Exception:
-    im = None 
+    st.warning("⚠️ logo.jpg dosyası bulunamadı. Logo/ikon kullanılamıyor.")
+except Exception as e:
+    # Hata durumunda Base64 ikon eklenmez
+    st.warning(f"İkon oluşturma hatası oluştu.")
+    base64_icon = None
+    favicon_image = None
     
 # ------------------------------------------------------------
 # 2. SAYFA AYARLARI
@@ -27,20 +59,14 @@ except Exception:
 st.set_page_config(
     page_title="Ferrokrom AI Optimizasyon",
     layout="wide",
-    page_icon=im, # Tarayıcı sekmesi ikonunu (favicon) ayarlar
+    page_icon=favicon_image, # PIL Image objesi (favicon için)
     initial_sidebar_state="expanded"
 )
 
-# iOS Ana Ekran İkonu Enjeksiyonu (Harici CDN çözümü)
-st.markdown("""
-<link rel="apple-touch-icon" sizes="180x180" href="https://raw.githubusercontent.com/umitarsn/BG-ArcOptimizer_v3/main/static/apple-touch-icon-180x180.png">
-""", unsafe_allow_html=True)
-
-
 # Streamlit Üst Bar Logosu (Yan panelin üstü)
 try:
-    if im:
-        st.logo(im, icon_image=im)
+    if favicon_image:
+        st.logo(favicon_image, icon_image=favicon_image)
 except:
     pass
 
@@ -148,8 +174,8 @@ def generate_cfd_fields(power, arc_deviation_pct):
 # ------------------------------------------------------------
 def main():
     # --- SOL MENÜ BAŞLIĞI VE LOGO ---
-    if im:
-        st.sidebar.image(im, use_container_width=True)
+    if favicon_image:
+        st.sidebar.image(favicon_image, use_container_width=True)
     else:
         st.sidebar.header("Ferrokrom AI")
     
