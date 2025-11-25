@@ -11,8 +11,7 @@ from sklearn.ensemble import RandomForestRegressor
 # Diğer gerekli importlar
 
 # ------------------------------------------------------------
-# 1. LOGO VE İKON İŞLEME (BASE64 İLE GARANTİLİ IOS ÇÖZÜMÜ)
-#    Bu Base64 kodu, RailWay/Streamlit statik dosya çakışmasını atlar.
+# 1. LOGO VE İKON İŞLEME (BASE64 + MANIFEST İLE GARANTİLİ IOS ÇÖZÜMÜ)
 # ------------------------------------------------------------
 
 base64_icon = None
@@ -27,7 +26,7 @@ try:
     img_ios = im.copy()
     width, height = img_ios.size
     
-    # Sol kenardan, resmin yüksekliği kadar kare kesme (BG kısmı garanti)
+    # Sol kenardan, resmin yüksekliği kadar kare kesme
     img_ios = img_ios.crop((0, 0, height, height)) 
     img_ios = img_ios.resize((180, 180)) 
     
@@ -36,18 +35,33 @@ try:
     img_ios.save(buff, format="PNG")
     base64_icon = base64.b64encode(buff.getvalue()).decode("utf-8")
     
-    # 4. Streamlit'in HTML'ine ZORLA ENJEKSİYON (st.set_page_config'ten önce çalışır)
-    # Bu, <head> etiketine data URI olarak eklenir.
-    st.markdown(f"""
-    <link rel="apple-touch-icon" 
-    sizes="180x180" 
-    href="data:image/png;base64,{base64_icon}">
-    """, unsafe_allow_html=True)
+    # 4. Streamlit'in HTML'ine ZORLA ENJEKSİYON (st.components.v1.html kullanılır)
+    if base64_icon:
+        st.components.v1.html(
+            f"""
+            <link rel="apple-touch-icon" 
+            sizes="180x180" 
+            href="data:image/png;base64,{base64_icon}">
+
+            <link rel="manifest" href="data:application/json,{{
+                %22name%22:%22Ferrokrom%20Optimizer%22,
+                %22short_name%22:%22Fero%22,
+                %22icons%22:[{{
+                    %22src%22:%22data:image/png;base64,{base64_icon}%22,
+                    %22sizes%22:%22180x180%22,
+                    %22type%22:%22image/png%22
+                }}],
+                %22start_url%22:%22.%22,
+                %22display%22:%22standalone%22
+            }}">
+            """,
+            height=0, 
+            width=0
+        )
 
 except FileNotFoundError:
     st.warning("⚠️ logo.jpg dosyası bulunamadı. Logo/ikon kullanılamıyor.")
 except Exception as e:
-    # Hata durumunda Base64 ikon eklenmez
     st.warning(f"İkon oluşturma hatası oluştu.")
     base64_icon = None
     favicon_image = None
