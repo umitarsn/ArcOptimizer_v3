@@ -113,7 +113,7 @@ def generate_dummy_scrap_data(n_suppliers=4, n_lots=40):
     # ... (kod aynı)
     np.random.seed(42)
     suppliers = [f"Tedarikçi {chr(65 + i)}" for i in range(n_suppliers)]
-    scrap_types = ["Krom İçi (High C)", "Paslanmaz Hurda", "Düşük Tenörlü Cevher", "Şarj Kromu"]
+    scrap_types = ["Krom İçi (High C)", "Paslanmaz Hurda", "Düşük Tenörlü cevher", "Şarj Kromu"]
     rows = []
     for i in range(n_lots):
         rows.append({
