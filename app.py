@@ -31,10 +31,9 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# iOS Ana Ekran İkonu Enjeksiyonu
-# v=3 parametresi, Safari'yi yeni bir ikon yüklemeye zorlar (Cache Busting)
+# iOS Ana Ekran İkonu Enjeksiyonu (Harici CDN çözümü)
 st.markdown("""
-<link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180x180.png?v=3">
+<link rel="apple-touch-icon" sizes="180x180" href="https://raw.githubusercontent.com/umitarsn/BG-ArcOptimizer_v3/main/static/apple-touch-icon-180x180.png">
 """, unsafe_allow_html=True)
 
 
