@@ -3,13 +3,20 @@ import base64
 import numpy as np
 import pandas as pd
 import streamlit as st
-from PIL import Image, ImageOps # ImageOps artık kullanılmıyor, yerine Image.crop gelecek
+from PIL import Image
+import time  # Cache buster için gerekli
+import math 
+
+# Diğer importlar
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import mean_absolute_error, r2_score
-from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 import plotly.express as px
+
+# --- Durum takibi için global değişkenler ---
+LOGO_PROCESS_SUCCESS = False
+LOGO_ERROR_MESSAGE = ""
+icon_preview_obj = None
 
 # ------------------------------------------------------------
 # 1. LOGO VE İKON İŞLEME (iOS UYUMLU - MUTLAK SOL KARE KESİM)
@@ -17,66 +24,74 @@ import plotly.express as px
 
 def process_logo_for_ios(image_path):
     """
-    Logoyu iPhone ana ekranı için ideal kare boyuta (180x180) getirir.
-    Logonun sol ucundan, yüksekliği kadar bir kare keserek (Şekil ve BG kısmı)
-    başka hiçbir yazının ikona girmemesini garanti eder.
+    Logoyu işler, 180x180 kare boyuta getirir ve PURE Base64 string olarak döndürür.
+    iOS ana ekran ikonları için logoyu sol kenarından keser.
     """
+    global LOGO_PROCESS_SUCCESS, LOGO_ERROR_MESSAGE, icon_preview_obj
     try:
-        # Logoyu aç
+        # Kodun ARADIĞI KAYNAK dosya: logo.jpg
         img = Image.open(image_path)
         
-        # Şeffaf (PNG) ise beyaz zemin ekle
+        # 1. Şeffaf (PNG) ise beyaz zemin ekle (JPG ise bu adımı atlar)
         if img.mode in ('RGBA', 'LA'):
             background = Image.new(img.mode[:-1], img.size, (255, 255, 255))
             background.paste(img, img.split()[-1])
             img = background
         
-        # --- KRİTİK DÜZELTME BURADA: ABSOLUTE CROP ---
+        # 2. Mutlak Sol Kare Kesim (Yüksekliği baz alır)
         width, height = img.size
-        
-        # Sol kenardan, resmin yüksekliği kadar kare bir alan tanımla.
-        # Bu alan, Şekil ve BG kısmını içerecektir.
+        # Sol üstten başlayıp, yüksekliği kadar kare kesim
         left = 0
         top = 0
-        right = height # Kare kesimin sağ sınırı, yüksekliğe eşit olmalı
+        right = height 
         bottom = height
-        
-        # Kare kesimi uygula
         img_square_cropped = img.crop((left, top, right, bottom))
         
-        # İkon boyutuna (180x180) küçült/büyüt
-        img_final_icon = img_square_cropped.resize((180, 180))
+        # 3. İkon boyutuna küçült/büyüt 
+        icon_preview_obj = img_square_cropped.resize((120, 120)) 
+        img_final_base64 = img_square_cropped.resize((180, 180)) 
 
-        # Base64 formatında hafızaya kaydet
+        # 4. KRİTİK: Base64 stringini oluştur
         buffered = io.BytesIO()
-        img_final_icon.save(buffered, format="PNG")
+        img_final_base64.save(buffered, format="PNG") 
         img_str = base64.b64encode(buffered.getvalue()).decode()
         
-        return f"data:image/png;base64,{img_str}", img
+        LOGO_PROCESS_SUCCESS = True
+        
+        return f"data:image/png;base64,{img_str}", img 
+
+    except FileNotFoundError:
+        LOGO_ERROR_MESSAGE = f"❌ Hata: '{image_path}' dosyası bulunamadı."
+        return None, None
     except Exception as e:
-        # st.error(f"Logo işlenirken hata oluştu: {e}") # Debug için açılabilir
+        LOGO_ERROR_MESSAGE = f"⚠️ Logo işleme hatası: {e}"
         return None, None
 
-# Logoyu işlemeye çalış (Dosya adı logo.jpg olmalı)
+# logo.jpg'yi girdi olarak kullan
 ios_icon_b64, original_logo_obj = process_logo_for_ios("logo.jpg")
 
 # ------------------------------------------------------------
-# 2. SAYFA AYARLARI
+# 2. SAYFA AYARLARI VE HTML ENJEKSİYONU
 # ------------------------------------------------------------
+
+# KRİTİK 1: Streamlit'in kendi ikonunu ayarlayın. Streamlit bunu favicon için kullanır.
 st.set_page_config(
     page_title="Ferrokrom AI",
     layout="wide",
-    page_icon=original_logo_obj if original_logo_obj else "⚒️",
+    page_icon="logo.jpg",  # Streamlit'in kendi Base64 çevirisini kullanıyoruz
     initial_sidebar_state="expanded"
 )
 
-# iOS Ana Ekran İkonu Enjeksiyonu
+# KRİTİK 2: iOS Ana Ekran İkonu Enjeksiyonu (Cache Buster ile)
 if ios_icon_b64:
+    # Base64 stringine, Safari'nin önbelleği atlaması için zaman damgası ekliyoruz
+    cache_busting_href = f"{ios_icon_b64}?t={int(time.time())}" 
+    
     st.markdown(
         f"""
         <head>
-            <link rel="apple-touch-icon" href="{ios_icon_b64}">
-            <link rel="apple-touch-icon" sizes="180x180" href="{ios_icon_b64}">
+            <link rel="apple-touch-icon" sizes="180x180" href="{cache_busting_href}">
+            
             <meta name="apple-mobile-web-app-title" content="Ferrokrom AI">
             <meta name="apple-mobile-web-app-capable" content="yes">
             <meta name="apple-mobile-web-app-status-bar-style" content="black">
@@ -88,18 +103,16 @@ if ios_icon_b64:
 # Streamlit Üst Bar Logosu
 try:
     if original_logo_obj:
-        st.logo("logo.jpg", icon_image="logo.jpg")
+        st.logo(original_logo_obj, icon_image=original_logo_obj)
 except:
     pass
 
 # ------------------------------------------------------------
-# 3. VERİ VE SİMÜLASYON FONKSİYONLARI (Kısaltıldı)
+# 3. UYGULAMA ANA AKIŞI FONKSİYONLARI (Kısaltıldı)
 # ------------------------------------------------------------
-# Fonksiyonların tam gövdesi önceki yanıtlarda olduğu gibi kalacaktır, burada yer tasarrufu için kısaltılmıştır.
 
 @st.cache_data
 def generate_dummy_trend_data(n_points=50):
-    # ... (kod aynı)
     dates = pd.date_range(start="2023-01-01", periods=n_points, freq="D")
     panel_temps = np.random.normal(35, 5, n_points) + np.linspace(0, 10, n_points)
     stability = np.random.normal(85, 5, n_points) + np.sin(np.linspace(0, 4*np.pi, n_points)) * 5
@@ -109,105 +122,93 @@ def generate_dummy_trend_data(n_points=50):
         "Arc_Stability_KPI": stability.clip(0, 100)
     })
 
-def generate_dummy_scrap_data(n_suppliers=4, n_lots=40):
-    # ... (kod aynı)
-    np.random.seed(42)
-    suppliers = [f"Tedarikçi {chr(65 + i)}" for i in range(n_suppliers)]
-    scrap_types = ["Krom İçi (High C)", "Paslanmaz Hurda", "Düşük Tenörlü cevher", "Şarj Kromu"]
-    rows = []
-    for i in range(n_lots):
-        rows.append({
-            "Supplier": np.random.choice(suppliers),
-            "Scrap_Type": np.random.choice(scrap_types),
-            "Price_USD_t": round(np.random.uniform(200, 500), 1),
-            "Quality_Index": round(np.random.uniform(60, 95), 1),
-            "Lot_tonnage": round(np.random.uniform(30, 90), 1),
-            "Yield_pct": round(np.random.uniform(85, 98), 1),
-            "kWh_per_t": round(np.random.uniform(350, 450), 1),
-            "Electrode_kg_per_t": round(np.random.uniform(1.5, 2.5), 2),
-            "O2_Nm3_per_t": round(np.random.uniform(200, 250), 1)
-        })
-    return pd.DataFrame(rows)
+@st.cache_data
+def generate_dummy_scrap_data():
+    data = {
+        'Scrap_Type': ['Heavy Melt Steel', 'Shredded Scrap', 'Busheling Scrap', 'Heavy Melt Steel', 'Plate/Structural'],
+        'Supplier': ['Supplier A', 'Supplier B', 'Supplier C', 'Supplier D', 'Supplier A'],
+        'Price_USD_t': [420, 380, 450, 410, 480],
+        'Quality_Index': [90, 75, 95, 85, 98],
+        'Lot_tonnage': [1500, 1000, 800, 2000, 1200],
+        'kWh_per_t': [380, 450, 350, 400, 320]
+    }
+    return pd.DataFrame(data)
 
-def feature_engineering(df: pd.DataFrame) -> pd.DataFrame:
-    # ... (kod aynı)
-    df = df.copy()
-    required_thermal_cols = ["panel_T_in_C", "panel_T_out_C", "panel_flow_kg_s", "power_kWh"]
-    if all(col in df.columns for col in required_thermal_cols):
-        cp_kJ = 4.18  
-        df['Q_Panel_kW'] = df['panel_flow_kg_s'] * (df['panel_T_out_C'] - df['panel_T_in_C']) * cp_kJ 
-        df['Thermal_Stress_Index'] = (df['Q_Panel_kW'] * 0.1) + (df['power_kWh'] * 0.005) 
-        max_val = df['Thermal_Stress_Index'].max()
-        df['Thermal_Stress_Index'] = (df['Thermal_Stress_Index'] / max_val * 100) if max_val > 0 else 50.0
-        df = df.drop(columns=['Q_Panel_kW'])
-
-    required_scrap_cols = ["scrap_HMS80_20_pct", "scrap_HBI_pct", "scrap_Shredded_pct"]
-    if all(col in df.columns for col in required_scrap_cols):
-        df['Scrap_Quality_Index'] = (
-            df['scrap_HBI_pct'] * 1.0 + 
-            df['scrap_Shredded_pct'] * 0.7 + 
-            df['scrap_HMS80_20_pct'] * 0.4
-        )
-        df = df.drop(columns=required_scrap_cols, errors='ignore') 
+@st.cache_data
+def feature_engineering(df):
+    if 'panel_T_out_C' in df.columns and 'panel_T_in_C' in df.columns:
+        df['Panel_Temp_Delta_C'] = df['panel_T_out_C'] - df['panel_T_in_C']
+    if 'power_kWh' in df.columns and 'tap_time_min' in df.columns:
+        df['Energy_Rate'] = df['power_kWh'] / df['tap_time_min']
     
-    return df.rename(columns={'Thermal_Imbalance_Index': 'Thermal_Stress_Index'})
+    if 'Scrap_Quality_Index' not in df.columns:
+        df['Scrap_Quality_Index'] = 80
+    if 'Thermal_Stress_Index' not in df.columns:
+        df['Thermal_Stress_Index'] = 10
+        
+    return df
 
-def create_gauge_chart(value, title="Sıcaklık", min_v=1500, max_v=1750, target=1620):
-    # ... (kod aynı)
+def create_gauge_chart(value):
     fig = go.Figure(go.Indicator(
-        mode = "gauge+number+delta",
-        value = value,
-        title = {'text': title},
-        delta = {'reference': target, 'increasing': {'color': "red"}, 'decreasing': {'color': "green"}},
-        gauge = {
-            'axis': {'range': [min_v, max_v], 'tickwidth': 1, 'tickcolor': "darkblue"},
-            'bar': {'color': "black"},
+        mode="gauge+number",
+        value=value,
+        domain={'x': [0, 1], 'y': [0, 1]},
+        title={'text': "Tahmini Döküm Sıcaklığı (°C)"},
+        gauge={
+            'axis': {'range': [1500, 1700], 'tickwidth': 1, 'tickcolor': "darkblue"},
+            'bar': {'color': "darkgreen"},
+            'bgcolor': "white",
+            'borderwidth': 2,
+            'bordercolor': "gray",
             'steps': [
-                {'range': [min_v, 1600], 'color': '#4dabf5'},
-                {'range': [1600, 1640], 'color': '#66ff66'},
-                {'range': [1640, max_v], 'color': '#ff6666'}],
-            'threshold': {'line': {'color': "red", 'width': 4}, 'thickness': 0.75, 'value': 1700}}))
-    fig.update_layout(height=250, margin=dict(l=20, r=20, t=30, b=20))
+                {'range': [1500, 1600], 'color': 'red'},
+                {'range': [1600, 1650], 'color': 'yellow'},
+                {'range': [1650, 1700], 'color': 'green'}
+            ],
+            'threshold': {
+                'line': {'color': "red", 'width': 4},
+                'thickness': 0.75,
+                'value': 1680
+            }
+        }
+    ))
+    fig.update_layout(height=250, margin=dict(t=50, b=10, l=10, r=10))
     return fig
 
-def generate_cfd_fields(power, arc_deviation_pct):
-    # ... (kod aynı)
-    nx, ny = 50, 50
-    x = np.linspace(0, 10, nx); y = np.linspace(0, 10, ny)
+def generate_cfd_fields(power, deviation_pct, size=20):
+    x = np.linspace(0, 1, size)
+    y = np.linspace(0, 1, size)
     X, Y = np.meshgrid(x, y)
-    
-    deviation_amount = (arc_deviation_pct / 100.0) * 5.0
-    center_x = 5.0 + deviation_amount * np.cos(np.pi/4) 
-    center_y = 5.0 + deviation_amount * np.sin(np.pi/4)
-    dist_sq = (X - center_x)**2 + (Y - center_y)**2
-    
-    diffusion_factor = 8.0 + (power / 400.0) 
-    max_arc_temp = 1600 + (power * 0.06) 
-    temp_field = max_arc_temp * np.exp(-dist_sq / diffusion_factor)
-    temp_field = np.maximum(temp_field, 1500) 
-    
-    angle = np.arctan2(Y - center_y, X - center_x)
-    radius = np.sqrt(dist_sq)
-    vel_mag = (power / 5000.0) * np.exp(-radius/3.0)
-    V_x = -vel_mag * np.sin(angle) + (vel_mag * 0.3 * np.cos(angle))
-    V_y = vel_mag * np.cos(angle) + (vel_mag * 0.3 * np.sin(angle))
-    
-    return X, Y, temp_field, V_x, V_y
-
+    T = 1500 + (power / 5000) * 200 + 50 * np.exp(-((X - 0.5)**2 + (Y - 0.5)**2) / 0.1)
+    Vx = (X - 0.5) * (0.1 + deviation_pct / 100)
+    Vy = (Y - 0.5) * (0.1 + deviation_pct / 100)
+    Vx += 0.05 * np.sin(5 * Y)
+    Vy += 0.05 * np.cos(5 * X)
+    T = np.clip(T, 1500, 1700) 
+    return X, Y, T, Vx, Vy
 
 # ------------------------------------------------------------
-# 4. UYGULAMA ANA AKIŞI
+# 4. MAIN FONKSİYONU
 # ------------------------------------------------------------
+
 def main():
-    # --- SOL MENÜ BAŞLIĞI VE LOGO ---
+    # --- LOGO DEBUG VE MENÜ BAŞLIĞI ---
     if original_logo_obj:
         st.sidebar.image(original_logo_obj, use_container_width=True)
     else:
         st.sidebar.header("Ferrokrom AI")
+        
+    if LOGO_ERROR_MESSAGE:
+        st.sidebar.error(LOGO_ERROR_MESSAGE)
     
-    st.sidebar.markdown("**Akıllı Karar Destek Sistemi**")
+    if LOGO_PROCESS_SUCCESS and icon_preview_obj:
+        st.sidebar.markdown("---")
+        st.sidebar.caption("✅ iOS İkon Önizlemesi:")
+        st.sidebar.image(icon_preview_obj, width=80) 
+        st.sidebar.success("✅ Başarılı: İkon Base64 ile enjekte edildi.")
     st.sidebar.markdown("---")
     
+    # --- MODÜL SEÇİMİ ---
     selected_module = st.sidebar.radio(
         "📑 Modül Seçimi:",
         [
@@ -223,11 +224,11 @@ def main():
 
     # --- VERİ YÜKLEME ---
     try:
-        # Eğer dosyanızın yolu farklıysa burayı düzeltin
-        df = pd.read_csv("data/BG_EAF_panelcooling_demo.csv") 
+        df = pd.read_csv("data/BG_EAF_panelcooling_demo.csv")
     except FileNotFoundError:
         st.error("❌ Veri dosyası bulunamadı! data/BG_EAF_panelcooling_demo.csv'yi kontrol edin.")
-        st.stop()
+        if selected_module != "4️⃣ Alarm, Tavsiye ve KPI'lar": 
+            st.stop()
 
     df = feature_engineering(df)
     
@@ -240,7 +241,7 @@ def main():
     model.fit(X, y)
     
     trend_df = generate_dummy_trend_data()
-    tonnage = 10.0 
+    tonnage = 10.0 # Örnek tonaj
 
     # ------------------------------------------------------------------
     # ORTAK GİRDİLER (SIDEBAR)
@@ -251,7 +252,7 @@ def main():
 
     arc_stability_factor = st.sidebar.slider("⚡ Ark Stabilizasyon Faktörü (0-1)", 0.0, 1.0, 0.90, 0.01)
     calculated_stress = (1.0 - arc_stability_factor) * 100
-    input_data['Thermal_Stress_Index'] = calculated_stress
+    input_data['Thermal_Stress_Index'] = calculated_stress 
     
     for col in X.columns:
         if col == 'power_kWh':
@@ -262,9 +263,10 @@ def main():
             input_data[col] = st.sidebar.slider("Hurda Kalitesi (0-100)", 0.0, 100.0, 70.0)
         elif col == 'tap_time_min':
             input_data[col] = st.sidebar.slider("Döküm Süresi (dk)", 40.0, 70.0, 55.0)
-        elif col != 'Thermal_Stress_Index':
+        elif col not in input_data: 
             input_data[col] = df[col].mean()
 
+    # Maliyet Girdileri
     if selected_module in ["2️⃣ AI Girdi Maliyetleri Düşürme", "5️⃣ AI Enterprise Level (EBITDA)", "6️⃣ Scrap & Purchase Intelligence"]:
         st.sidebar.markdown("---")
         st.sidebar.subheader("💰 Piyasa Fiyatları")
@@ -275,12 +277,14 @@ def main():
     else:
         price_scrap, price_elec, price_oxy, price_electrode = 400, 90, 0.08, 4.0
 
+    # Tahmin ve KPI Hesaplamaları
     input_df = pd.DataFrame([input_data])[X.columns]
     prediction = model.predict(input_df)[0]
     panel_health_index = 100 - calculated_stress
     arc_deviation_pct = (1.0 - arc_stability_factor) * 40.0 
 
-    # --- MODÜL İÇERİKLERİ (Kısaltıldı) ---
+    # --- MODÜL İÇERİKLERİ ---
+    
     if selected_module == "1️⃣ AI Bakım ve Duruş Engelleme":
         st.title("🛡️ Modül 1: AI Bakım & Duruş Engelleme")
         col1, col2 = st.columns([2, 1])
