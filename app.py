@@ -10,7 +10,7 @@ from sklearn.ensemble import RandomForestRegressor
 
 
 # --- LOGO YÜKLEME ---
-# logo.jpg, tarayıcı favicon'u ve yan panel logosu için kullanılır.
+# logo.jpg, tarayıcı favicon'u ve yan panel logosu için kullanılır!
 try:
     # logo.jpg'yi PIL nesnesi olarak yükleyin
     im = Image.open("logo.jpg")
