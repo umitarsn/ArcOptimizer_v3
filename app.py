@@ -1,37 +1,32 @@
 import numpy as np
 import pandas as pd
 import streamlit as st
-from PIL import Image # Sadece Image'ı import ediyoruz
+from PIL import Image # Sadece Image'ı import ediyoruz, ImageOps silindi.
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 import plotly.express as px
-
-# Diğer uygulama kütüphaneleri
 from sklearn.ensemble import RandomForestRegressor
-# from sklearn.metrics import mean_absolute_error, r2_score # Artık kullanılmayanları sildik
-# from sklearn.model_selection import train_test_split # Artık kullanılmayanları sildik
+# Diğer gerekli importlar
+
 
 # --- LOGO YÜKLEME ---
-# iOS ikon enjeksiyonu Dockerfile'a devredildiği için, sadece PIL nesnesini oluşturuyoruz.
+# logo.jpg, tarayıcı favicon'u ve yan panel logosu için kullanılır.
 try:
     # logo.jpg'yi PIL nesnesi olarak yükleyin
     im = Image.open("logo.jpg")
 except FileNotFoundError:
     im = None
-except Exception as e:
-    # Hata durumunda boş bırak
+except Exception:
     im = None 
     
 # ------------------------------------------------------------
 # 1. SAYFA AYARLARI
 # ------------------------------------------------------------
 
-# KRİTİK: st.set_page_config sadece TARAYICI SEKMESİ (favicon) için kullanılır. 
-# iOS ana ekran ikonu artık Dockerfile tarafından zorlanacaktır.
 st.set_page_config(
     page_title="Ferrokrom AI Optimizasyon",
     layout="wide",
-    page_icon=im, # PIL Image objesi
+    page_icon=im, # Tarayıcı sekmesi ikonunu (favicon) ayarlar
     initial_sidebar_state="expanded"
 )
 
@@ -153,7 +148,6 @@ def main():
 
     # --- VERİ YÜKLEME ---
     try:
-        # Veri dosyasının konumu (GitHub'daki konumuyla aynı olmalı)
         df = pd.read_csv("data/BG_EAF_panelcooling_demo.csv")
     except FileNotFoundError:
         st.error("❌ Veri dosyası bulunamadı! data/BG_EAF_panelcooling_demo.csv'yi kontrol edin.")
