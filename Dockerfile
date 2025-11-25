@@ -1,43 +1,47 @@
-# Dockerfile
+# ------------------------------------------------------------
+# Railway için Streamlit Dockerfile'ı (PYTHON 3.11)
+# ------------------------------------------------------------
 
-# En stabil ve uyumlu Python sürümünü kullan (runtime.txt'yi destekler)
+# 1. TEMEL İMAJ
+# Streamlit uygulamaları için resmi Python imajını kullanıyoruz
 FROM python:3.11-slim
 
-# Uygulama için ortam değişkenlerini ayarla
+# 2. ORTAM DEĞİŞKENLERİ
+# Streamlit'in statik dosyaları sunmasına izin vermek ve portu ayarlamak için
+ENV STREAMLIT_SERVER_ENABLE_STATIC_SERVING=true
 ENV PYTHONUNBUFFERED=1
 
-# Linux sistem bağımlılıklarını kur (özellikle scikit-learn, numpy gibi kütüphanelerin 
-# derlenmesi için gerekli olan build araçlarını)
+# 3. ÇALIŞMA DİZİNİ
+WORKDIR /usr/src/app
+
+# 4. BAĞIMLILIKLAR
+# requirements.txt dosyasını kopyalayın
+COPY requirements.txt .
+
+# Gerekli sistem paketlerini kurun (özellikle Pillow/matplotlib için)
 RUN apt-get update && apt-get install -y \
-    build-essential \
     gcc \
-    # Opsiyonel: Eğer veritabanı kullanıyorsanız (PostgreSQL) libpq-dev'i ekleyebilirsiniz
-    # libpq-dev \
+    libpq-dev \
+    # Gerekli diğer sistem paketleri buraya eklenebilir (örn: libsm6 libxext6) \
     && rm -rf /var/lib/apt/lists/*
 
-# Çalışma dizini oluştur
-WORKDIR /app
-
-# Gereksinimleri kopyala ve kur
-# Bu adım, Railway'de yaşadığınız 'Build Failed' sorununu çözen runtime.txt yerine geçer, 
-# çünkü artık Python sürümünü Dockerfile belirliyor.
-COPY requirements.txt .
+# Python bağımlılıklarını kurun
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Uygulama kodunu ve tüm varlıkları konteynere kopyalayın
-# Bu, app.py, static/ klasörü ve içindeki ikon dosyasını da kopyalar.
-COPY . /app
+# 5. UYGULAMA DOSYALARINI KOPYALAMA
+# Gerekli tüm dosya ve klasörleri kopyalayın
+COPY . .
 
-# KRİTİK ADIM: iOS İkon Enjeksiyonu
-# apple-touch-icon'un statik dosyaya işaret eden mutlak yolu
-ARG MOBILE_ICON_INJECTION="<link rel='apple-touch-icon' sizes='180x180' href='/app/static/apple-touch-icon-180x180.png'>\
-<link rel='manifest' href='/app/static/manifest.json'>"
+# 6. iOS SABİTLEME İÇİN STATİK DOSYA ENJEKSİYONU (KRİTİK ADIM)
+# iOS kısayolunun ana ekran ikonunu doğru göstermesi için
+RUN if [ -d "static" ]; then \
+    mkdir -p /usr/share/streamlit/static_assets/static; \
+    cp -r static/* /usr/share/streamlit/static_assets/static/; \
+    fi
 
-# Streamlit'in dahili HTML şablonunu (index.html) Stream Editor (sed) komutu ile değiştirir.
-# Bu, mobil işletim sistemlerinin </head> etiketinden hemen önce ikon bağlantısını bulmasını sağlar.
-RUN STREAMLIT_STATIC_PATH=$(python -c "import streamlit, os; print(os.path.join(os.path.dirname(streamlit.__file__), 'static', 'index.html'))") && \
-    sed -i "/<\/head>/i\ ${MOBILE_ICON_INJECTION}" $STREAMLIT_STATIC_PATH
+# 7. UYGULAMAYI BAŞLATMA (KRİTİK DÜZELTME)
+# Streamlit'i Railway'in otomatik olarak atadığı $PORT'ta başlatır.
+# ENTRYPOINT'in tırnak içinde 'sh -c' ile kullanılması, $PORT değişkeninin
+# doğru şekilde sayı olarak yorumlanmasını sağlar.
 
-# Streamlit uygulamasını çalıştırın
-# Railway'e özel PORT ve adresi kullanıyoruz
-ENTRYPOINT ["streamlit", "run", "app.py", "--server.port=$PORT", "--server.address=0.0.0.0"]
+ENTRYPOINT ["sh", "-c", "streamlit run app.py --server.port=$PORT --server.address=0.0.0.0"]
