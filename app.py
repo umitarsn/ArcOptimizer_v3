@@ -31,10 +31,10 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# iOS Ana Ekran İkonu Enjeksiyonu (Statik yola işaret eden basit ve zorunlu etiket)
-# Bu etiket, Streamlit'in HEAD etiketine eklenir ve iOS'in simgeyi doğru görmesini sağlar.
+# iOS Ana Ekran İkonu Enjeksiyonu
+# v=3 parametresi, Safari'yi yeni bir ikon yüklemeye zorlar (Cache Busting)
 st.markdown("""
-<link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180x180.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-180x180.png?v=3">
 """, unsafe_allow_html=True)
 
 
