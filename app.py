@@ -1,114 +1,50 @@
-import io
-import base64
 import numpy as np
 import pandas as pd
 import streamlit as st
-from PIL import Image
-import time  # Cache buster için gerekli
-import math 
-
-# Diğer importlar
-from sklearn.ensemble import RandomForestRegressor
+from PIL import Image # Sadece Image'ı import ediyoruz
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 import plotly.express as px
 
-# --- Durum takibi için global değişkenler ---
-LOGO_PROCESS_SUCCESS = False
-LOGO_ERROR_MESSAGE = ""
-icon_preview_obj = None
+# Diğer uygulama kütüphaneleri
+from sklearn.ensemble import RandomForestRegressor
+# from sklearn.metrics import mean_absolute_error, r2_score # Artık kullanılmayanları sildik
+# from sklearn.model_selection import train_test_split # Artık kullanılmayanları sildik
 
+# --- LOGO YÜKLEME ---
+# iOS ikon enjeksiyonu Dockerfile'a devredildiği için, sadece PIL nesnesini oluşturuyoruz.
+try:
+    # logo.jpg'yi PIL nesnesi olarak yükleyin
+    im = Image.open("logo.jpg")
+except FileNotFoundError:
+    im = None
+except Exception as e:
+    # Hata durumunda boş bırak
+    im = None 
+    
 # ------------------------------------------------------------
-# 1. LOGO VE İKON İŞLEME (iOS UYUMLU - MUTLAK SOL KARE KESİM)
-# ------------------------------------------------------------
-
-def process_logo_for_ios(image_path):
-    """
-    Logoyu işler, 180x180 kare boyuta getirir ve PURE Base64 string olarak döndürür.
-    iOS ana ekran ikonları için logoyu sol kenarından keser.
-    """
-    global LOGO_PROCESS_SUCCESS, LOGO_ERROR_MESSAGE, icon_preview_obj
-    try:
-        # Kodun ARADIĞI KAYNAK dosya: logo.jpg
-        img = Image.open(image_path)
-        
-        # 1. Şeffaf (PNG) ise beyaz zemin ekle (JPG ise bu adımı atlar)
-        if img.mode in ('RGBA', 'LA'):
-            background = Image.new(img.mode[:-1], img.size, (255, 255, 255))
-            background.paste(img, img.split()[-1])
-            img = background
-        
-        # 2. Mutlak Sol Kare Kesim (Yüksekliği baz alır)
-        width, height = img.size
-        # Sol üstten başlayıp, yüksekliği kadar kare kesim
-        left = 0
-        top = 0
-        right = height 
-        bottom = height
-        img_square_cropped = img.crop((left, top, right, bottom))
-        
-        # 3. İkon boyutuna küçült/büyüt 
-        icon_preview_obj = img_square_cropped.resize((120, 120)) 
-        img_final_base64 = img_square_cropped.resize((180, 180)) 
-
-        # 4. KRİTİK: Base64 stringini oluştur
-        buffered = io.BytesIO()
-        img_final_base64.save(buffered, format="PNG") 
-        img_str = base64.b64encode(buffered.getvalue()).decode()
-        
-        LOGO_PROCESS_SUCCESS = True
-        
-        return f"data:image/png;base64,{img_str}", img 
-
-    except FileNotFoundError:
-        LOGO_ERROR_MESSAGE = f"❌ Hata: '{image_path}' dosyası bulunamadı."
-        return None, None
-    except Exception as e:
-        LOGO_ERROR_MESSAGE = f"⚠️ Logo işleme hatası: {e}"
-        return None, None
-
-# logo.jpg'yi girdi olarak kullan
-ios_icon_b64, original_logo_obj = process_logo_for_ios("logo.jpg")
-
-# ------------------------------------------------------------
-# 2. SAYFA AYARLARI VE HTML ENJEKSİYONU
+# 1. SAYFA AYARLARI
 # ------------------------------------------------------------
 
-# KRİTİK 1: Streamlit'in kendi ikonunu ayarlayın. Streamlit bunu favicon için kullanır.
+# KRİTİK: st.set_page_config sadece TARAYICI SEKMESİ (favicon) için kullanılır. 
+# iOS ana ekran ikonu artık Dockerfile tarafından zorlanacaktır.
 st.set_page_config(
-    page_title="Ferrokrom AI",
+    page_title="Ferrokrom AI Optimizasyon",
     layout="wide",
-    page_icon="logo.jpg",  # Streamlit'in kendi Base64 çevirisini kullanıyoruz
+    page_icon=im, # PIL Image objesi
     initial_sidebar_state="expanded"
 )
 
-# KRİTİK 2: iOS Ana Ekran İkonu Enjeksiyonu (Cache Buster ile)
-if ios_icon_b64:
-    # Base64 stringine, Safari'nin önbelleği atlaması için zaman damgası ekliyoruz
-    cache_busting_href = f"{ios_icon_b64}?t={int(time.time())}" 
-    
-    st.markdown(
-        f"""
-        <head>
-            <link rel="apple-touch-icon" sizes="180x180" href="{cache_busting_href}">
-            
-            <meta name="apple-mobile-web-app-title" content="Ferrokrom AI">
-            <meta name="apple-mobile-web-app-capable" content="yes">
-            <meta name="apple-mobile-web-app-status-bar-style" content="black">
-        </head>
-        """,
-        unsafe_allow_html=True
-    )
-
-# Streamlit Üst Bar Logosu
+# Streamlit Üst Bar Logosu (Yan panelin üstü)
 try:
-    if original_logo_obj:
-        st.logo(original_logo_obj, icon_image=original_logo_obj)
+    if im:
+        st.logo(im, icon_image=im)
 except:
     pass
 
+
 # ------------------------------------------------------------
-# 3. UYGULAMA ANA AKIŞI FONKSİYONLARI (Kısaltıldı)
+# 2. VERİ VE SİMÜLASYON FONKSİYONLARI (Cache'li)
 # ------------------------------------------------------------
 
 @st.cache_data
@@ -188,24 +124,17 @@ def generate_cfd_fields(power, deviation_pct, size=20):
     return X, Y, T, Vx, Vy
 
 # ------------------------------------------------------------
-# 4. MAIN FONKSİYONU
+# 3. MAIN FONKSİYONU
 # ------------------------------------------------------------
 
 def main():
-    # --- LOGO DEBUG VE MENÜ BAŞLIĞI ---
-    if original_logo_obj:
-        st.sidebar.image(original_logo_obj, use_container_width=True)
+    # --- LOGO VE MENÜ BAŞLIĞI ---
+    if im:
+        st.sidebar.image(im, use_container_width=True)
     else:
         st.sidebar.header("Ferrokrom AI")
-        
-    if LOGO_ERROR_MESSAGE:
-        st.sidebar.error(LOGO_ERROR_MESSAGE)
-    
-    if LOGO_PROCESS_SUCCESS and icon_preview_obj:
-        st.sidebar.markdown("---")
-        st.sidebar.caption("✅ iOS İkon Önizlemesi:")
-        st.sidebar.image(icon_preview_obj, width=80) 
-        st.sidebar.success("✅ Başarılı: İkon Base64 ile enjekte edildi.")
+        st.sidebar.error("❌ logo.jpg bulunamadı!")
+
     st.sidebar.markdown("---")
     
     # --- MODÜL SEÇİMİ ---
@@ -224,6 +153,7 @@ def main():
 
     # --- VERİ YÜKLEME ---
     try:
+        # Veri dosyasının konumu (GitHub'daki konumuyla aynı olmalı)
         df = pd.read_csv("data/BG_EAF_panelcooling_demo.csv")
     except FileNotFoundError:
         st.error("❌ Veri dosyası bulunamadı! data/BG_EAF_panelcooling_demo.csv'yi kontrol edin.")
@@ -232,6 +162,7 @@ def main():
 
     df = feature_engineering(df)
     
+    # Model hazırlığı (Kısaltılmış)
     target_col = "tap_temperature_C"
     drop_cols = ["heat_id", "tap_temperature_C", "melt_temperature_C", "panel_T_in_C", "panel_T_out_C", "panel_flow_kg_s"]
     X = df.drop(columns=[c for c in drop_cols if c in df.columns] + [target_col], errors='ignore')
@@ -283,7 +214,7 @@ def main():
     panel_health_index = 100 - calculated_stress
     arc_deviation_pct = (1.0 - arc_stability_factor) * 40.0 
 
-    # --- MODÜL İÇERİKLERİ ---
+    # --- MODÜL İÇERİKLERİ (Tüm uygulama akışı burada) ---
     
     if selected_module == "1️⃣ AI Bakım ve Duruş Engelleme":
         st.title("🛡️ Modül 1: AI Bakım & Duruş Engelleme")
