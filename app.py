@@ -1,92 +1,29 @@
-import io
-import base64
 import numpy as np
 import pandas as pd
 import streamlit as st
-from PIL import Image
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 import plotly.express as px
 from sklearn.ensemble import RandomForestRegressor
-# Diğer gerekli importlar
+# PIL, io, base64 importları kaldırıldı
 
 # ------------------------------------------------------------
-# 1. LOGO VE İKON İŞLEME (BASE64 + MANIFEST İLE GARANTİLİ IOS ÇÖZÜMÜ)
-# ------------------------------------------------------------
-
-base64_icon = None
-favicon_image = None
-
-try:
-    # 1. logo.jpg dosyasını aç
-    im = Image.open("logo.jpg")
-    favicon_image = im
-
-    # 2. iOS için kare (180x180) versiyonunu oluştur
-    img_ios = im.copy()
-    width, height = img_ios.size
-    
-    # Sol kenardan, resmin yüksekliği kadar kare kesme
-    img_ios = img_ios.crop((0, 0, height, height)) 
-    img_ios = img_ios.resize((180, 180)) 
-    
-    # 3. Görüntüyü Base64'e dönüştür
-    buff = io.BytesIO()
-    img_ios.save(buff, format="PNG")
-    base64_icon = base64.b64encode(buff.getvalue()).decode("utf-8")
-    
-    # 4. Streamlit'in HTML'ine ZORLA ENJEKSİYON (st.components.v1.html kullanılır)
-    if base64_icon:
-        st.components.v1.html(
-            f"""
-            <link rel="apple-touch-icon" 
-            sizes="180x180" 
-            href="data:image/png;base64,{base64_icon}">
-
-            <link rel="manifest" href="data:application/json,{{
-                %22name%22:%22Ferrokrom%20Optimizer%22,
-                %22short_name%22:%22Fero%22,
-                %22icons%22:[{{
-                    %22src%22:%22data:image/png;base64,{base64_icon}%22,
-                    %22sizes%22:%22180x180%22,
-                    %22type%22:%22image/png%22
-                }}],
-                %22start_url%22:%22.%22,
-                %22display%22:%22standalone%22
-            }}">
-            """,
-            height=0, 
-            width=0
-        )
-
-except FileNotFoundError:
-    st.warning("⚠️ logo.jpg dosyası bulunamadı. Logo/ikon kullanılamıyor.")
-except Exception as e:
-    st.warning(f"İkon oluşturma hatası oluştu.")
-    base64_icon = None
-    favicon_image = None
-    
-# ------------------------------------------------------------
-# 2. SAYFA AYARLARI
+# 1. SAYFA AYARLARI
+#    page_icon=None yapılarak Streamlit'in kendi ikon ataması engellendi.
+#    iOS için gerekli olan apple-touch-icon.png dosyasının GitHub kök dizininde olması yeterlidir.
 # ------------------------------------------------------------
 
 st.set_page_config(
     page_title="Ferrokrom AI Optimizasyon",
     layout="wide",
-    page_icon=favicon_image, # PIL Image objesi (favicon için)
+    page_icon=None, # İkon ataması kaldırıldı
     initial_sidebar_state="expanded"
 )
 
-# Streamlit Üst Bar Logosu (Yan panelin üstü)
-try:
-    if favicon_image:
-        st.logo(favicon_image, icon_image=favicon_image)
-except:
-    pass
-
+# st.logo ve tüm HTML enjeksiyonları (Base64/Manifest) tamamen kaldırıldı.
 
 # ------------------------------------------------------------
-# 3. VERİ VE SİMÜLASYON FONKSİYONLARI (Cache'li)
+# 2. VERİ VE SİMÜLASYON FONKSİYONLARI (Cache'li)
 # ------------------------------------------------------------
 
 @st.cache_data
@@ -184,15 +121,11 @@ def generate_cfd_fields(power, arc_deviation_pct):
 
 
 # ------------------------------------------------------------
-# 4. UYGULAMA ANA AKIŞI
+# 3. UYGULAMA ANA AKIŞI
 # ------------------------------------------------------------
 def main():
-    # --- SOL MENÜ BAŞLIĞI VE LOGO ---
-    if favicon_image:
-        st.sidebar.image(favicon_image, use_container_width=True)
-    else:
-        st.sidebar.header("Ferrokrom AI")
-    
+    # --- SOL MENÜ BAŞLIĞI ---
+    st.sidebar.header("Ferrokrom AI")
     st.sidebar.markdown("**Akıllı Karar Destek Sistemi**")
     st.sidebar.markdown("---")
     
@@ -348,7 +281,7 @@ def main():
         revenue = sales_price * monthly_target
         var_cost_total = unit_var_cost * monthly_target
         gross = revenue - var_cost_total
-        ebitda = gross - fixed_cost
+        ebitda = revenue - var_cost_total - fixed_cost
         
         fig_water = go.Figure(go.Waterfall(
             name="EBITDA", orientation="v",
