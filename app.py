@@ -5,22 +5,22 @@ import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 import plotly.express as px
 from sklearn.ensemble import RandomForestRegressor
-# PIL, io, base64 importları kaldırıldı
+# PIL, io, base64 gibi ikonla ilgili importlar tamamen kaldırıldı.
 
 # ------------------------------------------------------------
 # 1. SAYFA AYARLARI
 #    page_icon=None yapılarak Streamlit'in kendi ikon ataması engellendi.
-#    iOS için gerekli olan apple-touch-icon.png dosyasının GitHub kök dizininde olması yeterlidir.
+#    İkon sunumu (apple-touch-icon.png) Nginx tarafından yapılacaktır.
 # ------------------------------------------------------------
 
 st.set_page_config(
     page_title="Ferrokrom AI Optimizasyon",
     layout="wide",
-    page_icon=None, # İkon ataması kaldırıldı
+    page_icon=None,  # <-- İkon ataması kaldırıldı ve NONE yapıldı.
     initial_sidebar_state="expanded"
 )
 
-# st.logo ve tüm HTML enjeksiyonları (Base64/Manifest) tamamen kaldırıldı.
+# st.logo ve tüm HTML enjeksiyonları (Base64/Manifest/Link Etiketleri) kaldırıldı.
 
 # ------------------------------------------------------------
 # 2. VERİ VE SİMÜLASYON FONKSİYONLARI (Cache'li)
@@ -144,6 +144,7 @@ def main():
 
     # --- VERİ YÜKLEME ---
     try:
+        # NOTE: Dosya yolu değişmiş olabilir, kontrol ediniz.
         df = pd.read_csv("data/BG_EAF_panelcooling_demo.csv") 
     except FileNotFoundError:
         st.error("❌ Veri dosyası bulunamadı! data/BG_EAF_panelcooling_demo.csv'yi kontrol edin.")
