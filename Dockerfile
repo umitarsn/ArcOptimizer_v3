@@ -20,7 +20,7 @@ COPY start.sh /app/start.sh
 RUN sed -i 's/\r$//' /app/start.sh
 RUN chmod +x /app/start.sh
 
-EXPOSE $PORT
+EXPOSE 8501
 
 HEALTHCHECK CMD curl --fail http://localhost:8501/_stcore/health
 
