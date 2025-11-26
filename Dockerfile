@@ -16,6 +16,8 @@ RUN pip3 install -r requirements.txt
 COPY nginx.conf /etc/nginx/sites-enabled/default
 
 COPY start.sh /app/start.sh
+# Bu komut, Windows satır sonlarını (CRLF) silerek start.sh'ın Linux'ta çalışmasını sağlar.
+RUN sed -i 's/\r$//' /app/start.sh
 RUN chmod +x /app/start.sh
 
 EXPOSE $PORT
