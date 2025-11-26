@@ -14,7 +14,7 @@ from sklearn.ensemble import RandomForestRegressor
 # ------------------------------------------------------------
 
 st.set_page_config(
-    page_title="Ferrokrom AI Optimizasyon",
+    page_title="Ferrokrom AI",
     layout="wide",
     page_icon=None,  # <-- İkon ataması kaldırıldı ve NONE yapıldı.
     initial_sidebar_state="expanded"
