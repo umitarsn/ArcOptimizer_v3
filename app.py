@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 import plotly.express as px
 from sklearn.ensemble import RandomForestRegressor
-# PIL, io, base64 gibi ikonla ilgili importlar tamamen kaldırıldı.
+# PIL, io, base64 gibi ikonla ilgili importlar tamamen kaldırıldıoı.
 
 # ------------------------------------------------------------
 # 1. SAYFA AYARLARI
