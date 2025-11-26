@@ -1,27 +1,18 @@
 FROM python:3.12-slim
+ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y \
-    nginx \
-    build-essential \
-    curl \
-    software-properties-common \
-    git \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends nginx curl build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY . .
+COPY . /app
 
-RUN pip3 install -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
-COPY nginx.conf /etc/nginx/sites-enabled/default
+COPY nginx.conf /etc/nginx/nginx.conf
+COPY start.sh /start.sh
+RUN chmod +x /start.sh
 
-COPY start.sh /app/start.sh
-# Bu komut, Windows satır sonlarını (CRLF) silerek start.sh'ın Linux'ta çalışmasını sağlar.
-RUN sed -i 's/\r$//' /app/start.sh
-RUN chmod +x /app/start.sh
-
-EXPOSE 8501
-
-HEALTHCHECK CMD curl --fail http://localhost:8501/_stcore/health
-
-ENTRYPOINT ["/app/start.sh"]
+EXPOSE 80 8501
+ENTRYPOINT ["/start.sh"]
