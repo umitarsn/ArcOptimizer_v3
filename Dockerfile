@@ -10,8 +10,8 @@ COPY . /app
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-# SADECE BU SATIRI DÜZELTTİK
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+# BURAYA DİKKAT: conf.d değil, sites-enabled/default
+COPY nginx.conf /etc/nginx/sites-enabled/default
 
 COPY start.sh /start.sh
 RUN chmod +x /start.sh
