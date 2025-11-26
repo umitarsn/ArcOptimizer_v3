@@ -10,7 +10,9 @@ COPY . /app
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY nginx.conf /etc/nginx/nginx.conf
+# SADECE BU SATIRI DÜZELTTİK
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
 COPY start.sh /start.sh
 RUN chmod +x /start.sh
 
