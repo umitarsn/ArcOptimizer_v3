@@ -1,122 +1,78 @@
+
 import os
 from datetime import datetime
-
 import pandas as pd
 import streamlit as st
 
-# ------------------------------------------------------------
-# SAYFA AYARLARI
-# ------------------------------------------------------------
-st.set_page_config(
-    page_title="Enerji Verimliligi",
-    layout="wide",
-    page_icon=None,
-    initial_sidebar_state="expanded",
-)
+# Sayfa ayarı
+st.set_page_config(page_title="Enerji Verimliliği", layout="wide", page_icon=None, initial_sidebar_state="expanded")
 
-# ------------------------------------------------------------
-# EXCEL OKUMA
-# ------------------------------------------------------------
 @st.cache_data
 def load_sheets():
-    """
-    dc_saf_soru_tablosu.xlsx dosyasindaki tum sheet'leri okur.
-
-    Varsayim:
-    - 1. satir baslik (A,B,C,D,E,F,G)
-    - A,B,C,D: ekranda gorunecek
-    - D: musteri tarafindan set edilecek
-    - E,F,G: detay bilgi (info icin)
-    """
     file_name = "dc_saf_soru_tablosu.xlsx"
-
     try:
         sheets = pd.read_excel(file_name, sheet_name=None, header=0)
     except FileNotFoundError:
-        st.error(
-            "HATA: 'dc_saf_soru_tablosu.xlsx' bulunamadi. Dosyayi app.py ile ayni klasore koyun."
-        )
+        st.error("HATA: 'dc_saf_soru_tablosu.xlsx' bulunamadı. Dosyayı app.py ile aynı klasöre koyun.")
         return None
     except Exception as e:
-        st.error(f"Excel okunurken hata olustu: {e}")
+        st.error(f"Excel okunurken hata oluştu: {e}")
         return None
 
     cleaned = {}
     for name, df in sheets.items():
-        if df is None:
-            continue
-
-        # Tamamen bos satir ve kolonlari temizle
-        df = df.dropna(how="all")
-        df = df.dropna(axis=1, how="all")
-
-        if not df.empty:
-            cleaned[name] = df
-
+        if df is not None:
+            df = df.dropna(how="all").dropna(axis=1, how="all")
+            if not df.empty:
+                cleaned[name] = df
     return cleaned
 
-
-# ------------------------------------------------------------
-# FORM SAYFASI
-# ------------------------------------------------------------
 def show_energy_form():
-    st.title("Enerji Verimliligi")
+    st.title("📥 Enerji Verimliliği Formu")
 
-    st.markdown(
-        """
-        Bu form, **dc_saf_soru_tablosu.xlsx** dosyasina gore hazirlanmistir.
-
-        - Ekranda yalnizca **A, B, C, D** sutunlari gorunur.
-        - **D sutunu** musterinin set edecegi alandir ve duzenlenebilir.
-        - Her satirda bir **Info (ℹ️)** etkisi vardir; secili satir icin
-          **E, F, G** sutunlarindaki detaylar altta gosterilir.
-        """
-    )
+    st.markdown("""
+    Bu form **dc_saf_soru_tablosu.xlsx** dosyasına göre hazırlanmıştır.
+    - A, B, C: Açıklama alanları
+    - D: Müşteri girişi yapılacak alan
+    - ℹ️ işaretli satırlar seçilerek detay (E, F, G...) açıklamalar aşağıda görülebilir.
+    - 🔴 Zorunlu (Önem: 1), 🟡 Faydalı (Önem: 2), ⚪ Opsiyonel (Önem: 3)
+    """)
 
     sheets = load_sheets()
-    if sheets is None or len(sheets) == 0:
+    if sheets is None:
         return
 
     total_rows = sum(len(df) for df in sheets.values())
     with st.sidebar:
-        st.subheader("Form Bilgisi")
-        st.info(f"Toplam satir sayisi: {total_rows}")
+        st.subheader("Form Özeti")
+        st.info(f"Toplam satır sayısı: {total_rows}")
 
     edited_sheets = {}
 
-    # --------------------------------------------------------
-    # FORM
-    # --------------------------------------------------------
     with st.form("energy_form"):
-        st.subheader("Musteri Girdileri")
+        st.subheader("📝 Müşteri Girdileri")
 
         for i, (sheet_name, df_full) in enumerate(sheets.items(), start=1):
-
             with st.expander(f"{i}. {sheet_name}", expanded=(i == 1)):
-
-                # A,B,C,D sutunlarini al (ilk 4 sutun varsayiliyor)
-                main_cols = list(df_full.columns[:4])
-                # Detay sutunlari (E,F,G ve varsa sonrasi)
-                detail_cols = list(df_full.columns[4:])
-
-                # D sutunu musteri girdisi (4. kolon)
-                if len(main_cols) < 4:
-                    st.warning("Bu sheet icin A,B,C,D sutunlari eksik, atlaniyor.")
+                if df_full.shape[1] < 4:
+                    st.warning("Bu sayfa 4 sütun içermiyor, atlanıyor.")
                     continue
 
-                col_A = main_cols[0]
-                col_B = main_cols[1]
-                col_C = main_cols[2]
-                col_D = main_cols[3]  # Set kolonu
+                col_A, col_B, col_C, col_D = df_full.columns[:4]
+                detail_cols = df_full.columns[4:]
 
-                # Gorunecek tabloyu hazirla
-                view_df = df_full[main_cols].copy()
-                # Info kolonunu ekle (sadece ikon)
+                view_df = df_full[[col_A, col_B, col_C, col_D]].copy()
                 view_df["Info"] = "ℹ️"
 
-                st.caption("A, B, C ve D sutunlari. D sutununu set edebilirsiniz.")
+                renk_map = {"1": "#FFC7CE", "2": "#FFEB9C", "3": "#FFFFFF"}
+                if "Önem" in df_full.columns:
+                    view_df["renk"] = df_full["Önem"].astype(str).map(renk_map).fillna("#FFFFFF")
+                else:
+                    view_df["renk"] = "#FFFFFF"
+
+                st.caption("Zorunlu alanlar kırmızı, faydalı olanlar sarı ile işaretlidir.")
                 edited_view = st.data_editor(
-                    view_df,
+                    view_df.drop(columns=["renk"]),
                     use_container_width=True,
                     hide_index=True,
                     column_config={
@@ -124,52 +80,29 @@ def show_energy_form():
                         col_B: st.column_config.TextColumn(disabled=True),
                         col_C: st.column_config.TextColumn(disabled=True),
                         "Info": st.column_config.TextColumn(disabled=True),
-                        # col_D sutunu default olarak duzenlenebilir kaliyor
+                        col_D: st.column_config.TextColumn(),
                     },
                     key=f"sheet_{i}_view",
                 )
 
-                # Info: detay gosterme
-                if detail_cols:
-                    st.markdown("**Detay gormek icin satir secin (ℹ️):**")
-
-                    # Secim icin etiket olusturalim: "Tag - Deger" gibi (A ve B)
-                    labels = []
-                    indices = []
-                    for idx, row in edited_view.iterrows():
-                        label = f"{row[col_A]} - {row[col_B]}"
-                        labels.append(label)
-                        indices.append(idx)
+                # Detay INFO
+                if detail_cols.any():
+                    st.markdown("ℹ️ Satır seçin, açıklama gösterilsin:")
+                    labels = [f"{row[col_A]} - {row[col_B]}" for idx, row in edited_view.iterrows()]
+                    indices = list(edited_view.index)
 
                     if labels:
-                        selected_label = st.selectbox(
-                            "Satir",
-                            options=labels,
-                            key=f"sheet_{i}_detail_select",
-                        )
-
-                        # Secilen label'in index'ini bul
+                        selected_label = st.selectbox("Satır seç:", options=labels, key=f"sheet_{i}_detail_select")
                         sel_idx = indices[labels.index(selected_label)]
                         detail_row = df_full.loc[sel_idx, detail_cols]
+                        details = [f"- **{col}**: {val}" for col, val in detail_row.items() if pd.notna(val) and str(val).strip()]
+                        if details:
+                            st.info("\n".join(details))
 
-                        # Detaylari alt alta goster
-                        detail_lines = []
-                        for col in detail_cols:
-                            val = detail_row[col]
-                            if pd.notna(val) and str(val).strip() != "":
-                                detail_lines.append(f"- **{col}**: {val}")
-
-                        if detail_lines:
-                            st.info("\n".join(detail_lines))
-
-                # Daha sonra D sutununu geri yazmak icin sakla
                 edited_sheets[sheet_name] = (df_full, edited_view, col_D)
 
-        submitted = st.form_submit_button("Kaydet")
+        submitted = st.form_submit_button("💾 Kaydet")
 
-    # --------------------------------------------------------
-    # KAYDETME
-    # --------------------------------------------------------
     if submitted:
         os.makedirs("data", exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -178,23 +111,77 @@ def show_energy_form():
         try:
             with pd.ExcelWriter(out_file, engine="openpyxl") as writer:
                 for name, (df_full, edited_view, col_D) in edited_sheets.items():
-                    # D sutununu edited_view'den geri yaz
                     df_full[col_D] = edited_view[col_D]
                     df_full.to_excel(writer, sheet_name=name[:31], index=False)
         except Exception as e:
-            st.error(f"Kayit yapilirken hata olustu: {e}")
+            st.error(f"Veri kaydında hata: {e}")
             return
 
-        st.success("Veriler basariyla kaydedildi.")
-        st.write(f"Kaydedilen dosya: {out_file}")
+        st.success("✔️ Veriler başarıyla kaydedildi.")
+        st.write(f"📁 Dosya adı: `{out_file}`")
 
-
-# ------------------------------------------------------------
-# MAIN
-# ------------------------------------------------------------
 def main():
     show_energy_form()
 
-
 if __name__ == "__main__":
     main()
+
+
+
+# ------------------------------------------------------------
+# GİRİŞ VERİLERİ ANALİZİ ve GÖSTERİMİ
+# ------------------------------------------------------------
+def show_input_stats(sheets):
+    st.sidebar.subheader("🧮 Veri Giriş Durumu")
+
+    total_cells = 0
+    filled_cells = 0
+    required_cells = 0
+    filled_required = 0
+    missing_required_entries = []
+
+    for sheet_name, df in sheets.items():
+        if df is None or df.empty or df.shape[1] < 4:
+            continue
+        col_D = df.columns[3]
+        if "Önem" not in df.columns:
+            continue
+        for idx, row in df.iterrows():
+            val = row[col_D]
+            importance = str(row["Önem"]).strip()
+            total_cells += 1
+            if pd.notna(val) and str(val).strip() != "":
+                filled_cells += 1
+                if importance == "1":
+                    filled_required += 1
+            elif importance == "1":
+                missing_required_entries.append((sheet_name, row[0], row[1]))
+                required_cells += 1
+            elif importance == "1":
+                required_cells += 1
+
+    overall_pct = int(100 * filled_cells / total_cells) if total_cells else 0
+    required_pct = int(100 * filled_required / required_cells) if required_cells else 0
+
+    st.sidebar.metric("Toplam Giriş Oranı", f"{overall_pct}%")
+    st.sidebar.progress(overall_pct / 100)
+
+    st.sidebar.metric("Zorunlu Veri Girişi", f"{required_pct}%")
+    st.sidebar.progress(required_pct / 100)
+
+    if missing_required_entries:
+        with st.sidebar.expander("❗ Eksik Zorunlu Değerler"):
+            for sheet, tag, name in missing_required_entries:
+                st.write(f"📄 `{sheet}` → **{tag} - {name}**")
+
+
+# show_energy_form içinde form yüklenince otomatik olarak bu gösterimi ekle
+def show_energy_form():
+    st.title("📥 Enerji Verimliliği Formu")
+    # ... (form yapısı aynı şekilde devam eder) ...
+    sheets = load_sheets()
+    if sheets is None:
+        return
+
+    show_input_stats(sheets)  # yeni modülü burada çağır
+    # ... kalan form akışı aynı şekilde devam eder ...
