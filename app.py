@@ -56,10 +56,10 @@ def show_input_stats(sheets):
     required_pct = int(100 * filled_required / required_cells) if required_cells else 0
 
     st.sidebar.metric("Toplam Giriş Oranı", f"{overall_pct}%")
-    st.sidebar.progress(overall_pct / 100)
+    st.sidebar.progress(min(overall_pct / 100, 1.0))
 
     st.sidebar.metric("Zorunlu Veri Girişi", f"{required_pct}%")
-    st.sidebar.progress(required_pct / 100)
+    st.sidebar.progress(min(required_pct / 100, 1.0))
 
     if missing_required_entries:
         with st.sidebar.expander("❗ Eksik Zorunlu Değerler"):
