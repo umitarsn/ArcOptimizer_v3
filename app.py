@@ -62,6 +62,13 @@ def show_energy_form():
                 detail_cols = df_full.columns[4:]
 
                 view_df = df_full[[col_A, col_B, col_C, col_D]].copy()
+    if "Önem" in df_full.columns:
+        view_df[col_B] = df_full["Önem"].astype(str).map({
+            "1": "🔴 " + df_full[col_B],
+            "2": "🟡 " + df_full[col_B],
+            "3": df_full[col_B]
+        }).fillna(df_full[col_B])
+    
                 view_df["Info"] = "ℹ️"
 
                 renk_map = {"1": "#FFC7CE", "2": "#FFEB9C", "3": "#FFFFFF"}
@@ -125,63 +132,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-# ------------------------------------------------------------
-# GİRİŞ VERİLERİ ANALİZİ ve GÖSTERİMİ
-# ------------------------------------------------------------
-def show_input_stats(sheets):
-    st.sidebar.subheader("🧮 Veri Giriş Durumu")
-
-    total_cells = 0
-    filled_cells = 0
-    required_cells = 0
-    filled_required = 0
-    missing_required_entries = []
-
-    for sheet_name, df in sheets.items():
-        if df is None or df.empty or df.shape[1] < 4:
-            continue
-        col_D = df.columns[3]
-        if "Önem" not in df.columns:
-            continue
-        for idx, row in df.iterrows():
-            val = row[col_D]
-            importance = str(row["Önem"]).strip()
-            total_cells += 1
-            if pd.notna(val) and str(val).strip() != "":
-                filled_cells += 1
-                if importance == "1":
-                    filled_required += 1
-            elif importance == "1":
-                missing_required_entries.append((sheet_name, row[0], row[1]))
-                required_cells += 1
-            elif importance == "1":
-                required_cells += 1
-
-    overall_pct = int(100 * filled_cells / total_cells) if total_cells else 0
-    required_pct = int(100 * filled_required / required_cells) if required_cells else 0
-
-    st.sidebar.metric("Toplam Giriş Oranı", f"{overall_pct}%")
-    st.sidebar.progress(overall_pct / 100)
-
-    st.sidebar.metric("Zorunlu Veri Girişi", f"{required_pct}%")
-    st.sidebar.progress(required_pct / 100)
-
-    if missing_required_entries:
-        with st.sidebar.expander("❗ Eksik Zorunlu Değerler"):
-            for sheet, tag, name in missing_required_entries:
-                st.write(f"📄 `{sheet}` → **{tag} - {name}**")
-
-
-# show_energy_form içinde form yüklenince otomatik olarak bu gösterimi ekle
-def show_energy_form():
-    st.title("📥 Enerji Verimliliği Formu")
-    # ... (form yapısı aynı şekilde devam eder) ...
-    sheets = load_sheets()
-    if sheets is None:
-        return
-
-    show_input_stats(sheets)  # yeni modülü burada çağır
-    # ... kalan form akışı aynı şekilde devam eder ...
