@@ -15,15 +15,48 @@ st.set_page_config(
 )
 
 # ------------------------------------------------------------
+# LOGO / MARKALAMA (Sol üst taraf)
+# ------------------------------------------------------------
+LOGO_FILE = "logo.png"
+
+if os.path.exists(LOGO_FILE):
+    # Sidebar navigasyonunun üstüne logo yerleştiren CSS
+    st.markdown(
+        f"""
+        <style>
+            [data-testid="stSidebarNav"]::before {{
+                content: "";
+                display: block;
+                background-image: url("{LOGO_FILE}");
+                background-size: contain;
+                background-repeat: no-repeat;
+                background-position: center;
+                height: 120px;
+                margin: 16px 16px 24px 16px;
+            }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # Sidebar içinde de logo görüntüle (fallback / daha belirgin görünüm)
+    with st.sidebar:
+        st.image(LOGO_FILE, width=160)
+else:
+    # Logo yoksa sadece başlık göster
+    st.sidebar.header("Enerji Verimliliği")
+
+
+# ------------------------------------------------------------
 # SORU TABLOSU YÜKLEME FONKSİYONU
 # ------------------------------------------------------------
 @st.cache_data
 def load_questions():
     """
-    AI - DC SAF Soru Tablosu.xlsx dosyasını yükler.
+    dc_saf_soru_tablosu.xlsx dosyasını yükler.
     Excel dosyası app.py ile aynı klasörde olmalı.
     """
-    file_name = "AI - DC SAF Soru Tablosu.xlsx"
+    file_name = "dc_saf_soru_tablosu.xlsx"
     try:
         df = pd.read_excel(file_name)
     except FileNotFoundError:
@@ -50,9 +83,10 @@ def show_energy_efficiency_form():
     if df_q is None:
         return
 
-    # Sidebar’da basit bir başlık
-    st.sidebar.header("Enerji Verimliliği")
-    st.sidebar.info("Müşteri formunu doldurup kaydedebilir.")
+    # Sidebar’da kısa açıklama
+    with st.sidebar:
+        st.subheader("Form Bilgisi")
+        st.info("Müşteri formu doldurup kaydedebilir. Veriler yerel dosyaya yazılır.")
 
     # Form
     with st.form("energy_efficiency_form"):
@@ -67,7 +101,7 @@ def show_energy_efficiency_form():
             aciklama = row.get("Açıklama")
             veri_kaynagi = row.get("Veri Kaynağı")
 
-            # Boş satır veya tamamen açıklama satırı ise atla
+            # Boş satır ise geç
             if pd.isna(label):
                 continue
 
@@ -88,7 +122,7 @@ def show_energy_efficiency_form():
                 aciklama if isinstance(aciklama, str) and aciklama.strip() != "" else None
             )
 
-            # Basit widget mantığı: birim içinde tipik sayısal semboller varsa number_input
+            # Birim içinde tipik sayısal semboller varsa number_input, yoksa text_input
             unit_str = str(unit) if not pd.isna(unit) else ""
             numeric_unit_tokens = [
                 "%",
@@ -118,8 +152,10 @@ def show_energy_efficiency_form():
 
         submitted = st.form_submit_button("Kaydet")
 
+    # --------------------------------------------------------
+    # FORM SUBMIT EDİLDİĞİNDE
+    # --------------------------------------------------------
     if submitted:
-        # Kayıtları uzun formatta kaydediyoruz: her satır bir soru-cevap
         records = []
         timestamp = datetime.now().isoformat(timespec="seconds")
 
