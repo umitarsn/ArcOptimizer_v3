@@ -32,6 +32,9 @@ def show_form():
     if not sheets:
         return
 
+    if "clicked_info" not in st.session_state:
+        st.session_state.clicked_info = ""
+
     for sheet_idx, (sheet_name, df) in enumerate(sheets.items(), start=1):
         with st.expander(f"{sheet_idx}. {sheet_name}", expanded=(sheet_idx == 1)):
 
@@ -43,6 +46,7 @@ def show_form():
             detail_cols = df.columns[4:]
 
             for idx, row in df.iterrows():
+                row_key = f"{sheet_name}_{idx}"
                 c1, c2, c3, c4, c5 = st.columns([2, 3, 3, 2, 1])
                 with c1:
                     st.markdown(f"**{row[col_A]}**")
@@ -52,17 +56,20 @@ def show_form():
                 with c3:
                     st.markdown(str(row[col_C]) if pd.notna(row[col_C]) else "")
                 with c4:
-                    df.at[idx, col_D] = st.text_input(label="", value=str(row[col_D]) if pd.notna(row[col_D]) else "", key=f"val_{sheet_name}_{idx}")
+                    df.at[idx, col_D] = st.text_input(label="", value=str(row[col_D]) if pd.notna(row[col_D]) else "", key=f"val_{row_key}")
                 with c5:
-                    if st.button("ℹ️", key=f"info_{sheet_name}_{idx}"):
-                        explanations = []
-                        for dc_idx, col in enumerate(detail_cols):
-                            val = row[col]
-                            if pd.notna(val):
-                                prefix = ["📘 Açıklama:", "📌 Kaynak:", "⏱ Kayıt Aralığı:"][dc_idx] if dc_idx < 3 else f"🔹 {col}:"
-                                explanations.append(f"{prefix} {val}")
-                        if explanations:
-                            st.info("\n\n".join(explanations))
+                    if st.button("ℹ️", key=f"info_{row_key}"):
+                        st.session_state.clicked_info = row_key
+
+                if st.session_state.clicked_info == row_key:
+                    explanations = []
+                    for dc_idx, col in enumerate(detail_cols):
+                        val = row[col]
+                        if pd.notna(val):
+                            prefix = ["📘 Açıklama:", "📌 Kaynak:", "⏱ Kayıt Aralığı:"][dc_idx] if dc_idx < 3 else f"🔹 {col}:"
+                            explanations.append(f"{prefix} {val}")
+                    if explanations:
+                        st.info("\n\n".join(explanations))
 
 def main():
     show_form()
