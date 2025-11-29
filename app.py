@@ -5,7 +5,6 @@ import streamlit as st
 
 st.set_page_config(page_title="Enerji Verimliliği", layout="wide", page_icon=None, initial_sidebar_state="expanded")
 
-# -------------------- Veri Yükleme ve Kaydetme --------------------
 @st.cache_data
 def load_sheets():
     file_name = "dc_saf_soru_tablosu.xlsx"
@@ -42,7 +41,6 @@ def save_current_inputs(dataframes, file_name):
     all_data = pd.concat(combined)
     all_data.to_csv(file_name, index=False)
 
-# -------------------- Giriş Durumu --------------------
 def show_input_stats(sheets):
     st.sidebar.subheader("🧮 Veri Giriş Durumu")
 
@@ -84,15 +82,13 @@ def show_input_stats(sheets):
             for sheet, tag, name in missing_required_entries:
                 st.write(f"📄 `{sheet}` → **{tag} - {name}**")
 
-# -------------------- Ana Form --------------------
 def show_energy_form():
     st.title("📥 Enerji Verimliliği Formu")
     st.markdown("""
-    Bu form **dc_saf_soru_tablosu.xlsx** dosyasına göre hazırlanmıştır.
-    - A, B, C: Açıklama alanları
-    - D: Müşteri girişi yapılacak alan
-    - ℹ️ işaretli satırlar seçilerek detay (E, F, G...) açıklamalar aşağıda görülebilir.
-    - 🔴 Zorunlu (Önem: 1), 🟡 Faydalı (Önem: 2), ⚪ Opsiyonel (Önem: 3)
+    Bu form **dc_saf_soru_tablosu.xlsx** dosyasına göre hazırlanmıştır.  
+    1. Girişi sadece **Set Değeri** alanına yapınız.  
+    2. 🔴 Zorunlu (Önem: 1), 🟡 Faydalı (Önem: 2), ⚪ Opsiyonel (Önem: 3) olarak belirtilmiştir.  
+    3. Detaylı bilgi ve açıklama için ℹ️ simgesine tıklayınız.
     """)
 
     sheets = load_sheets()
@@ -115,7 +111,7 @@ def show_energy_form():
                 detail_cols = df_full.columns[4:]
 
                 view_df = df_full[[col_A, col_B, col_C, col_D]].copy()
-                view_df["Info"] = "ℹ️"
+                view_df["Info"] = [f"ℹ️ {j}" for j in range(len(view_df))]
 
                 if "Önem" in df_full.columns:
                     renk_map = {"1": "🔴", "2": "🟡", "3": ""}
@@ -129,8 +125,9 @@ def show_energy_form():
                         if not match.empty:
                             view_df.loc[idx, col_D] = match.iloc[0][col_D]
 
+                st.caption("ℹ️ Satır seçin, açıklama görüntülensin.")
                 edited_view = st.data_editor(
-                    view_df.drop(columns=["Info"]),
+                    view_df,
                     use_container_width=True,
                     hide_index=True,
                     column_config={
@@ -138,28 +135,30 @@ def show_energy_form():
                         col_B: st.column_config.TextColumn(disabled=True),
                         col_C: st.column_config.TextColumn(disabled=True),
                         col_D: st.column_config.TextColumn(),
+                        "Info": st.column_config.TextColumn(disabled=False),
                     },
                     key=f"sheet_{i}_view",
                 )
 
-                if detail_cols.any():
-                    st.markdown("⬇️ Herhangi bir hücreye veri girildiğinde, detay aşağıda otomatik gösterilir:")
-                    selected_idx = None
-                    for idx, row in edited_view.iterrows():
-                        if pd.notna(row[col_D]) and str(row[col_D]).strip() != "":
-                            selected_idx = idx
+                selected_label = st.selectbox(
+                    "Açıklama görmek için satır seçiniz:",
+                    options=[f"{row[col_A]} - {row[col_B]}" for idx, row in view_df.iterrows()],
+                    key=f"select_row_{i}"
+                )
+                selected_idx = next(idx for idx, row in view_df.iterrows()
+                                    if f"{row[col_A]} - {row[col_B]}" == selected_label)
 
-                    if selected_idx is not None:
-                        detail_row = df_full.loc[selected_idx, detail_cols]
-                        details = []
-                        if pd.notna(detail_row.iloc[0]):
-                            details.append(f"🧾 **Detaylı Açıklama:** {detail_row.iloc[0]}")
-                        if len(detail_cols) > 1 and pd.notna(detail_row.iloc[1]):
-                            details.append(f"📊 **Veri Kaynağı:** {detail_row.iloc[1]}")
-                        if len(detail_cols) > 2 and pd.notna(detail_row.iloc[2]):
-                            details.append(f"⏱ **Kayıt Aralığı:** {detail_row.iloc[2]}")
-                        if details:
-                            st.info("\n\n".join(details))
+                if selected_idx is not None:
+                    detail_row = df_full.loc[selected_idx, detail_cols]
+                    details = []
+                    if pd.notna(detail_row.iloc[0]):
+                        details.append(f"🧾 **Detaylı Açıklama:** {detail_row.iloc[0]}")
+                    if len(detail_cols) > 1 and pd.notna(detail_row.iloc[1]):
+                        details.append(f"📊 **Veri Kaynağı:** {detail_row.iloc[1]}")
+                    if len(detail_cols) > 2 and pd.notna(detail_row.iloc[2]):
+                        details.append(f"⏱ **Kayıt Aralığı:** {detail_row.iloc[2]}")
+                    if details:
+                        st.info("\n\n".join(details))
 
                 edited_sheets[sheet_name] = (df_full, edited_view, col_D)
 
