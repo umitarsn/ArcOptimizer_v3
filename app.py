@@ -45,6 +45,14 @@ def show_form():
             col_A, col_B, col_C, col_D = df.columns[:4]
             detail_cols = df.columns[4:]
 
+            # Başlık satırı
+            c1, c2, c3, c4, c5 = st.columns([2, 3, 3, 2, 1])
+            with c1: st.markdown("**Tag**")
+            with c2: st.markdown("**Değişken**")
+            with c3: st.markdown("**Açıklama**")
+            with c4: st.markdown("**Set**")
+            with c5: st.markdown("**Info**")
+
             for idx, row in df.iterrows():
                 row_key = f"{sheet_name}_{idx}"
                 c1, c2, c3, c4, c5 = st.columns([2, 3, 3, 2, 1])
