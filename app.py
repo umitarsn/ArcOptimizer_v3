@@ -76,9 +76,8 @@ def show_energy_form():
                 st.markdown(
                     """
                     <style>
-                        th {
-                            text-align: left !important;
-                        }
+                        th { text-align: left !important; }
+                        td { vertical-align: top !important; padding-top: 0.3em; padding-bottom: 0.3em; }
                     </style>
                     """,
                     unsafe_allow_html=True,
@@ -108,36 +107,23 @@ def show_energy_form():
                     tag = row.get("Tag", "")
                     name = row.get("Değişken", "")
                     desc = row.get("Açıklama", "")
-                    birim = row.get("Set", "") if str(row.get("Set")).strip() in ["%", "°C", "kg", "None", ""] else ""
+                    birim = row.get("Set", "") if str(row.get("Set")).strip() not in ["None", "nan"] else ""
                     val_key = f"val_{row_key}"
 
-                    st.markdown(
-                        f"""
-                        <tr>
-                            <td><b>{tag}</b></td>
-                            <td>{renk} {name}</td>
-                            <td>{desc}</td>
-                            <td style="vertical-align:top;">
-                        """,
-                        unsafe_allow_html=True,
-                    )
-
-                    input_val = st.text_input(
+                    # Form input
+                    cols = st.columns([2.2, 2.5, 3.5, 2, 0.7])
+                    cols[0].markdown(f"**{tag}**")
+                    cols[1].markdown(f"{renk} {name}")
+                    cols[2].markdown(desc)
+                    df.at[idx, "Set"] = cols[3].text_input(
                         label="",
                         key=val_key,
                         label_visibility="collapsed",
-                        placeholder=birim if birim not in ["None", "nan"] else ""
+                        placeholder=birim
                     )
 
-                    df.at[idx, "Set"] = input_val
-
-                    st.markdown("</td>", unsafe_allow_html=True)
-
-                    with st.container():
-                        if st.button("ℹ️", key=f"info_{row_key}"):
-                            st.session_state.info_state[row_key] = not st.session_state.info_state.get(row_key, False)
-
-                    st.markdown("</tr>", unsafe_allow_html=True)
+                    if cols[4].button("ℹ️", key=f"info_{row_key}"):
+                        st.session_state.info_state[row_key] = not st.session_state.info_state.get(row_key, False)
 
                     # Detayları göster
                     if st.session_state.info_state.get(row_key, False):
