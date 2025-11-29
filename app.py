@@ -98,6 +98,7 @@ def show_energy_form():
     show_input_stats(sheets)
     edited_sheets = {}
 
+    # Veri Giriş Formu
     with st.form("energy_form"):
         st.subheader("📝 Müşteri Girdileri")
 
@@ -137,22 +138,6 @@ def show_energy_form():
                     key=f"sheet_{i}_view",
                 )
 
-                st.markdown("ℹ️ Satıra ait detayları görmek için tıklayınız:")
-                for idx in view_df.index:
-                    row = view_df.loc[idx]
-                    label = f"{row[col_A]} - {row[col_B]}"
-                    if st.button(f"ℹ️ {label}", key=f"info_button_{sheet_name}_{idx}"):
-                        detail_row = df_full.loc[idx, detail_cols]
-                        details = []
-                        if pd.notna(detail_row.iloc[0]):
-                            details.append(f"🧾 **Detaylı Açıklama:** {detail_row.iloc[0]}")
-                        if len(detail_cols) > 1 and pd.notna(detail_row.iloc[1]):
-                            details.append(f"📊 **Veri Kaynağı:** {detail_row.iloc[1]}")
-                        if len(detail_cols) > 2 and pd.notna(detail_row.iloc[2]):
-                            details.append(f"⏱ **Kayıt Aralığı:** {detail_row.iloc[2]}")
-                        if details:
-                            st.info("\n\n".join(details))
-
                 edited_sheets[sheet_name] = (df_full, edited_view, col_D)
 
         submitted = st.form_submit_button("💾 Kaydet")
@@ -170,9 +155,29 @@ def show_energy_form():
         except Exception as e:
             st.error(f"Veri kaydında hata: {e}")
             return
-
         st.success("✔️ Veriler başarıyla kaydedildi.")
         st.write(f"📁 Dosya adı: `{out_file}`")
+
+    # Form dışında info açıklama bölümü
+    st.divider()
+    st.subheader("📖 Açıklamalar")
+    for sheet_name, df_full in sheets.items():
+        col_A, col_B = df_full.columns[:2]
+        detail_cols = df_full.columns[4:]
+        with st.expander(f"📄 {sheet_name}"):
+            for idx, row in df_full.iterrows():
+                label = f"{row[col_A]} - {row[col_B]}"
+                if st.button(f"ℹ️ {label}", key=f"info_button_{sheet_name}_{idx}"):
+                    detail_row = df_full.loc[idx, detail_cols]
+                    details = []
+                    if pd.notna(detail_row.iloc[0]):
+                        details.append(f"🧾 **Detaylı Açıklama:** {detail_row.iloc[0]}")
+                    if len(detail_cols) > 1 and pd.notna(detail_row.iloc[1]):
+                        details.append(f"📊 **Veri Kaynağı:** {detail_row.iloc[1]}")
+                    if len(detail_cols) > 2 and pd.notna(detail_row.iloc[2]):
+                        details.append(f"⏱ **Kayıt Aralığı:** {detail_row.iloc[2]}")
+                    if details:
+                        st.info("\n\n".join(details))
 
 def main():
     show_energy_form()
