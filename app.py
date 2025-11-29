@@ -1,119 +1,146 @@
 import os
+import json
 from datetime import datetime
-
 import pandas as pd
 import streamlit as st
 
+# ----------------------------------------------
+# GENEL AYARLAR
+# ----------------------------------------------
 st.set_page_config(
-    page_title="Enerji Verimliliği",
+    page_title="Enerji Verimliliği Formu",
     layout="wide",
-    page_icon=None,
-    initial_sidebar_state="expanded",
 )
 
+SAVE_PATH = "data/saved_inputs.json"
+os.makedirs("data", exist_ok=True)
+
+if os.path.exists(SAVE_PATH):
+    with open(SAVE_PATH, "r") as f:
+        saved_inputs = json.load(f)
+else:
+    saved_inputs = {}
+
+if "info_state" not in st.session_state:
+    st.session_state.info_state = {}
+
+# ----------------------------------------------
+# EXCEL OKUMA
+# ----------------------------------------------
 @st.cache_data
 
 def load_sheets():
     file_name = "dc_saf_soru_tablosu.xlsx"
     try:
-        sheets = pd.read_excel(file_name, sheet_name=None, header=0)
-    except FileNotFoundError:
-        st.error("HATA: 'dc_saf_soru_tablosu.xlsx' bulunamadı. Dosyayı app.py ile aynı klasöre koyun.")
-        return None
+        xls = pd.read_excel(file_name, sheet_name=None)
+        return {k: v.dropna(how="all") for k, v in xls.items() if not v.empty}
     except Exception as e:
-        st.error(f"Excel okunurken hata oluştu: {e}")
-        return None
+        st.error(f"Excel dosyası yüklenemedi: {e}")
+        return {}
 
-    cleaned = {}
-    for name, df in sheets.items():
-        if df is None:
-            continue
-        df = df.dropna(how="all")
-        df = df.dropna(axis=1, how="all")
-        if not df.empty:
-            cleaned[name] = df
-
-    return cleaned
-
+# ----------------------------------------------
+# FORM GÖSTERİMİ
+# ----------------------------------------------
 def show_energy_form():
-    st.title("Enerji Verimliliği Formu")
+    st.markdown("## 🧠 Enerji Verimliliği Formu")
     st.markdown("""
     Bu form **dc_saf_soru_tablosu.xlsx** dosyasına göre hazırlanmıştır.
 
-    1. Girişi sadece **Set Değeri** alanına yapınız.
-    2. 🔴 Zorunlu ("Önem: 1"), 🟡 Faydalı ("Önem: 2"), ⚪ Opsiyonel ("Önem: 3") olarak belirtilmiştir.
-    3. Detaylı bilgi ve açıklama için 🔹 simgesine tıklayınız.
+    1. Girişi sadece **Set Değeri** alanına yapınız.  
+    2. 🔴 Zorunlu (Önem: 1), 🟡 Faydalı (Önem: 2), ⚪ Opsiyonel (Önem: 3) olarak belirtilmiştir.  
+    3. Detaylı bilgi ve açıklama için ℹ️ simgesine tıklayınız.
     """)
 
     sheets = load_sheets()
-    if sheets is None or len(sheets) == 0:
+    if not sheets:
         return
 
-    if "user_inputs" not in st.session_state:
-        st.session_state.user_inputs = {}
+    total_fields = 0
+    total_filled = 0
+    required_fields = 0
+    required_filled = 0
 
-    for sheet_name, df in sheets.items():
-        st.markdown(f"### {sheet_name}")
+    for sheet_idx, (sheet_name, df) in enumerate(sheets.items(), start=1):
+        with st.expander(f"{sheet_idx}. {sheet_name}", expanded=(sheet_idx == 1)):
 
-        headers = df.columns.tolist()
-        tag_col, var_col, desc_col = headers[0], headers[1], headers[2]
-        set_col = headers[3] if len(headers) > 3 else None
-        detail_cols = headers[4:] if len(headers) > 4 else []
+            for idx, row in df.iterrows():
+                row_key = f"{sheet_idx}_{idx}"
+                önem = int(row.get("Önem", 3))
+                renk = {1: "🔴", 2: "🟡", 3: "⚪"}.get(önem, "⚪")
+                birim = str(row.get("Set", "")).strip()
+                tag = row.get("Tag", "")
+                val_key = f"{sheet_name}|{tag}"
 
-        for idx, row in df.iterrows():
-            col1, col2, col3, col4, col5 = st.columns([2, 3, 4, 2, 1])
+                cols = st.columns([2.2, 2.5, 4.0, 2.5, 0.7])
+                cols[0].markdown(f"**{tag}**")
+                cols[1].markdown(f"{renk} {row.get('Değişken', '')}")
+                cols[2].markdown(row.get("Açıklama", ""))
 
-            with col1:
-                st.markdown(f"**{row[tag_col]}**")
+                current_val = saved_inputs.get(val_key, "")
 
-            with col2:
-                importance = str(row.get("Önem", "")).strip()
-                marker = ""
-                if importance == "1":
-                    marker = "🔴"
-                elif importance == "2":
-                    marker = "🟡"
-                elif importance == "3":
-                    marker = "⚪"
-                st.markdown(f"{marker} {row[var_col]}")
+                with cols[3]:
+                    input_col, unit_col = st.columns([5, 2])
+                    with input_col:
+                        new_val = st.text_input(
+                            label="",
+                            value=current_val,
+                            key=val_key,
+                            label_visibility="collapsed",
+                            placeholder=""
+                        )
+                        # Kaydet
+                        if new_val != current_val:
+                            saved_inputs[val_key] = new_val
+                            with open(SAVE_PATH, "w") as f:
+                                json.dump(saved_inputs, f)
 
-            with col3:
-                st.markdown(f"{row[desc_col]}")
+                    with unit_col:
+                        st.markdown(f"**{birim if birim not in ['None', 'nan'] else ''}**")
 
-            with col4:
-                tag = row[tag_col]
-                unit = str(row[set_col]) if set_col in row and pd.notna(row[set_col]) else ""
-                default_value = st.session_state.user_inputs.get(tag, "")
-                user_input = st.text_input("", value=default_value, key=f"input_{sheet_name}_{idx}")
-                if unit:
-                    user_input = user_input.strip()
-                    if user_input and not user_input.endswith(unit):
-                        user_input = f"{user_input} {unit}"
-                st.session_state.user_inputs[tag] = user_input
+                with cols[4]:
+                    if st.button("ℹ️", key=f"info_{row_key}"):
+                        st.session_state.info_state[row_key] = not st.session_state.info_state.get(row_key, False)
 
-            with col5:
-                if detail_cols:
-                    if st.button("ℹ️", key=f"info_{sheet_name}_{idx}"):
-                        details = []
-                        for col in detail_cols:
-                            val = row.get(col, "")
-                            if pd.notna(val) and str(val).strip():
-                                details.append(f"- **{col}**: {val}")
-                        if details:
-                            st.info("\n".join(details))
+                if st.session_state.info_state.get(row_key, False):
+                    detaylar = []
+                    if pd.notna(row.get("Detaylı Açıklama")):
+                        detaylar.append(f"🔷 **Detaylı Açıklama:** {row['Detaylı Açıklama']}")
+                    if pd.notna(row.get("Veri Kaynağı")):
+                        detaylar.append(f"📌 **Kaynak:** {row['Veri Kaynağı']}")
+                    if pd.notna(row.get("Kayıt Aralığı")):
+                        detaylar.append(f"⏱️ **Kayıt Aralığı:** {row['Kayıt Aralığı']}")
+                    if pd.notna(row.get("Önem")):
+                        detaylar.append(f"🔵 **Önem:** {int(row['Önem'])}")
+                    st.info("  \n".join(detaylar))
 
-    if st.button("Kaydet"):
-        try:
-            df_out = pd.DataFrame([st.session_state.user_inputs]).T.reset_index()
-            df_out.columns = ["Tag", "Input"]
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            out_file = os.path.join("data", f"energy_inputs_{timestamp}.xlsx")
-            os.makedirs("data", exist_ok=True)
-            df_out.to_excel(out_file, index=False)
-            st.success(f"Veriler kaydedildi: {out_file}")
-        except Exception as e:
-            st.error(f"Kayıt hatası: {e}")
+                total_fields += 1
+                if new_val.strip():
+                    total_filled += 1
+                    if önem == 1:
+                        required_filled += 1
+                if önem == 1:
+                    required_fields += 1
 
+    # --------------------------
+    # GİRİŞ DURUMU BİLGİSİ
+    # --------------------------
+    st.sidebar.subheader("📊 Veri Giriş Durumu")
+
+    pct_all = round(100 * total_filled / total_fields, 1) if total_fields else 0
+    pct_required = round(100 * required_filled / required_fields, 1) if required_fields else 0
+
+    st.sidebar.metric("Toplam Giriş Oranı", f"{pct_all}%")
+    st.sidebar.progress(pct_all / 100)
+
+    st.sidebar.metric("Zorunlu Veri Girişi", f"{pct_required}%")
+    st.sidebar.progress(min(pct_required / 100, 1.0))
+
+    if required_fields - required_filled > 0:
+        st.sidebar.warning(f"❗ Eksik Zorunlu Değerler: {required_fields - required_filled}")
+
+# ----------------------------------------------
+# UYGULAMA BAŞLAT
+# ----------------------------------------------
 def main():
     show_energy_form()
 
