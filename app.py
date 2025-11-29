@@ -1,87 +1,172 @@
+import streamlit as st
+import pandas as pd
 import os
 from datetime import datetime
-import pandas as pd
-import streamlit as st
 
-st.set_page_config(page_title="Enerji Verimliliği", layout="wide")
+st.set_page_config(
+    page_title="Enerji Verimliliği Formu",
+    layout="wide",
+)
 
 @st.cache_data
 def load_sheets():
     try:
-        sheets = pd.read_excel("dc_saf_soru_tablosu.xlsx", sheet_name=None, header=0)
+        df_dict = pd.read_excel("dc_saf_soru_tablosu.xlsx", sheet_name=None)
+        return df_dict
     except Exception as e:
-        st.error(f"Excel okunurken hata oluştu: {e}")
+        st.error(f"Excel dosyası yüklenemedi: {e}")
         return {}
-    cleaned = {}
-    for name, df in sheets.items():
-        df = df.dropna(how="all").dropna(axis=1, how="all")
-        if not df.empty:
-            cleaned[name] = df
-    return cleaned
 
-def show_form():
-    st.title("📥 Enerji Verimliliği Formu")
-    st.markdown("""
-    Bu form **dc_saf_soru_tablosu.xlsx** dosyasına göre hazırlanmıştır.  
-    1. Girişi sadece **Set Değeri** alanına yapınız.  
-    2. 🔴 Zorunlu (Önem: 1), 🟡 Faydalı (Önem: 2), ⚪ Opsiyonel (Önem: 3) olarak belirtilmiştir.  
-    3. Detaylı bilgi ve açıklama için ℹ️ simgesine tıklayınız.
-    """)
+def show_input_stats(sheets):
+    total = 0
+    filled = 0
+    required = 0
+    required_filled = 0
+
+    for sheet in sheets.values():
+        for _, row in sheet.iterrows():
+            val = row.get("Set")
+            if pd.notna(val) and str(val).strip() != "" and str(val).strip() not in ["%", "None", "nan"]:
+                filled += 1
+                if row.get("Önem") == 1:
+                    required_filled += 1
+            if row.get("Önem") == 1:
+                required += 1
+            total += 1
+
+    pct = round(100 * filled / total, 1) if total else 0
+    required_pct = round(100 * required_filled / required, 1) if required else 0
+    required_missing = required - required_filled
+
+    with st.sidebar:
+        st.subheader("📊 Veri Giriş Durumu")
+        st.metric("Toplam Giriş Oranı", f"{pct}%")
+        st.progress(pct / 100)
+
+        st.metric("Zorunlu Veri Girişi", f"{required_pct}%")
+        st.progress(min(required_pct / 100, 1))
+
+        if required_missing > 0:
+            st.warning(f"❗ Eksik Zorunlu Değerler: {required_missing}")
+
+def show_energy_form():
+    st.markdown("## 📥 Enerji Verimliliği Formu")
+    st.markdown(
+        """
+        Bu form **dc_saf_soru_tablosu.xlsx** dosyasına göre hazırlanmıştır.
+
+        1. Girişi sadece **Set Değeri** alanına yapınız.  
+        2. 🔴 Zorunlu (Önem: 1), 🟡 Faydalı (Önem: 2), ⚪ Opsiyonel (Önem: 3) olarak belirtilmiştir.  
+        3. Detaylı bilgi ve açıklama için ℹ️ simgesine tıklayınız.
+        """
+    )
 
     sheets = load_sheets()
     if not sheets:
         return
 
+    show_input_stats(sheets)
+
     if "info_state" not in st.session_state:
         st.session_state.info_state = {}
 
-    for sheet_idx, (sheet_name, df) in enumerate(sheets.items(), start=1):
-        with st.expander(f"{sheet_idx}. {sheet_name}", expanded=(sheet_idx == 1)):
+    with st.form("veri_formu"):
+        for sheet_idx, (sheet_name, df) in enumerate(sheets.items(), start=1):
+            with st.expander(f"{sheet_idx}. {sheet_name}", expanded=(sheet_idx == 1)):
+                st.markdown(
+                    """
+                    <style>
+                        th {
+                            text-align: left !important;
+                        }
+                    </style>
+                    """,
+                    unsafe_allow_html=True,
+                )
 
-            if df.shape[1] < 4:
-                st.warning("Bu sayfa için gerekli sütunlar eksik.")
-                continue
+                st.markdown(
+                    """
+                    <table style="width:100%">
+                        <thead>
+                            <tr>
+                                <th>Tag</th>
+                                <th>Değişken</th>
+                                <th>Açıklama</th>
+                                <th>Set</th>
+                                <th>Info</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                    """,
+                    unsafe_allow_html=True,
+                )
 
-            col_A, col_B, col_C, col_D = df.columns[:4]
-            detail_cols = df.columns[4:]
+                for idx, row in df.iterrows():
+                    row_key = f"{sheet_idx}_{idx}"
+                    önem = int(row.get("Önem", 3))
+                    renk = {1: "🔴", 2: "🟡", 3: "⚪"}.get(önem, "⚪")
+                    tag = row.get("Tag", "")
+                    name = row.get("Değişken", "")
+                    desc = row.get("Açıklama", "")
+                    birim = row.get("Set", "") if str(row.get("Set")).strip() in ["%", "°C", "kg", "None", ""] else ""
+                    val_key = f"val_{row_key}"
 
-            # Başlık satırı
-            c1, c2, c3, c4, c5 = st.columns([2, 3, 3, 2, 1])
-            with c1: st.markdown("**Tag**")
-            with c2: st.markdown("**Değişken**")
-            with c3: st.markdown("**Açıklama**")
-            with c4: st.markdown("**Set**")
-            with c5: st.markdown("**Info**")
+                    st.markdown(
+                        f"""
+                        <tr>
+                            <td><b>{tag}</b></td>
+                            <td>{renk} {name}</td>
+                            <td>{desc}</td>
+                            <td style="vertical-align:top;">
+                        """,
+                        unsafe_allow_html=True,
+                    )
 
-            for idx, row in df.iterrows():
-                row_key = f"{sheet_name}_{idx}"
-                c1, c2, c3, c4, c5 = st.columns([2, 3, 3, 2, 1])
-                with c1:
-                    st.markdown(f"**{row[col_A]}**")
-                with c2:
-                    emoji = {"1": "🔴", "2": "🟡", "3": "⚪"}.get(str(row.get("Önem", "3")), "")
-                    st.markdown(f"{emoji} {row[col_B]}")
-                with c3:
-                    st.markdown(str(row[col_C]) if pd.notna(row[col_C]) else "")
-                with c4:
-                    df.at[idx, col_D] = st.text_input(label="", value=str(row[col_D]) if pd.notna(row[col_D]) else "", key=f"val_{row_key}")
-                with c5:
-                    if st.button("ℹ️", key=f"info_{row_key}"):
-                        current = st.session_state.info_state.get(row_key, False)
-                        st.session_state.info_state[row_key] = not current
+                    input_val = st.text_input(
+                        label="",
+                        key=val_key,
+                        label_visibility="collapsed",
+                        placeholder=birim if birim not in ["None", "nan"] else ""
+                    )
 
-                if st.session_state.info_state.get(row_key, False):
-                    explanations = []
-                    for dc_idx, col in enumerate(detail_cols):
-                        val = row[col]
-                        if pd.notna(val):
-                            prefix = ["📘 Açıklama:", "📌 Kaynak:", "⏱ Kayıt Aralığı:"][dc_idx] if dc_idx < 3 else f"🔹 {col}:"
-                            explanations.append(f"{prefix} {val}")
-                    if explanations:
-                        st.info("\n\n".join(explanations))
+                    df.at[idx, "Set"] = input_val
+
+                    st.markdown("</td>", unsafe_allow_html=True)
+
+                    with st.container():
+                        if st.button("ℹ️", key=f"info_{row_key}"):
+                            st.session_state.info_state[row_key] = not st.session_state.info_state.get(row_key, False)
+
+                    st.markdown("</tr>", unsafe_allow_html=True)
+
+                    # Detayları göster
+                    if st.session_state.info_state.get(row_key, False):
+                        detaylar = []
+                        if pd.notna(row.get("Detaylı Açıklama")):
+                            detaylar.append(f"🔷 **Detaylı Açıklama:** {row['Detaylı Açıklama']}")
+                        if pd.notna(row.get("Veri Kaynağı")):
+                            detaylar.append(f"📌 **Kaynak:** {row['Veri Kaynağı']}")
+                        if pd.notna(row.get("Kayıt Aralığı")):
+                            detaylar.append(f"⏱️ **Kayıt Aralığı:** {row['Kayıt Aralığı']}")
+                        if pd.notna(row.get("Önem")):
+                            detaylar.append(f"🔵 **Önem:** {int(row['Önem'])}")
+
+                        st.info("  \n".join(detaylar))
+
+                st.markdown("</tbody></table>", unsafe_allow_html=True)
+
+        submitted = st.form_submit_button("💾 Kaydet")
+        if submitted:
+            os.makedirs("data", exist_ok=True)
+            filename = datetime.now().strftime("veri_formu_%Y%m%d_%H%M%S.xlsx")
+            filepath = os.path.join("data", filename)
+            with pd.ExcelWriter(filepath) as writer:
+                for sheet_name, df in sheets.items():
+                    df.to_excel(writer, sheet_name=sheet_name[:31], index=False)
+            st.success(f"Veriler kaydedildi: {filename}")
 
 def main():
-    show_form()
+    show_energy_form()
 
 if __name__ == "__main__":
     main()
