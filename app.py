@@ -137,10 +137,11 @@ def show_energy_form():
                     key=f"sheet_{i}_view",
                 )
 
-                st.markdown("ℹ️ Satıra ait detayları görmek için aşağıdan tıklayın:")
+                st.markdown("ℹ️ Satıra ait detayları görmek için tıklayınız:")
                 for idx in view_df.index:
-                    label = f"{view_df.loc[idx, col_A]} - {view_df.loc[idx, col_B]}"
-                    if st.button(f"ℹ️ {label}", key=f"info_{i}_{idx}"):
+                    row = view_df.loc[idx]
+                    label = f"{row[col_A]} - {row[col_B]}"
+                    if st.button(f"ℹ️ {label}", key=f"info_button_{sheet_name}_{idx}"):
                         detail_row = df_full.loc[idx, detail_cols]
                         details = []
                         if pd.notna(detail_row.iloc[0]):
