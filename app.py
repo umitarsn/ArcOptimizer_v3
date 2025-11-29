@@ -28,18 +28,11 @@ if "info_state" not in st.session_state:
 # EXCEL OKUMA
 # ----------------------------------------------
 @st.cache_data
-
 def load_sheets():
     file_name = "dc_saf_soru_tablosu.xlsx"
     try:
         xls = pd.read_excel(file_name, sheet_name=None)
-        cleaned = {}
-        for k, df in xls.items():
-            df = df.dropna(how="all")
-            df.columns = df.columns.astype(str)  # Ensure column names are strings
-            if not df.empty:
-                cleaned[k] = df
-        return cleaned
+        return {k: v.dropna(how="all") for k, v in xls.items() if not v.empty}
     except Exception as e:
         st.error(f"Excel dosyası yüklenemedi: {e}")
         return {}
@@ -48,7 +41,7 @@ def load_sheets():
 # FORM GÖSTERİMİ
 # ----------------------------------------------
 def show_energy_form():
-    st.markdown("## 🧐 Enerji Verimliliği Formu")
+    st.markdown("## 🧠 Enerji Verimliliği Formu")
     st.markdown("""
     Bu form **dc_saf_soru_tablosu.xlsx** dosyasına göre hazırlanmıştır.
 
@@ -71,14 +64,10 @@ def show_energy_form():
 
             for idx, row in df.iterrows():
                 row_key = f"{sheet_idx}_{idx}"
-                
-                # Ensure all keys are strings to avoid NaN
-                row = row.fillna("")
-                
-                önem = int(row.get("\u00d6nem", 3))
+                önem = int(row.get("Önem", 3))
                 renk = {1: "🔴", 2: "🟡", 3: "⚪"}.get(önem, "⚪")
                 birim = str(row.get("Set", "")).strip()
-                tag = str(row.get("Tag", ""))
+                tag = row.get("Tag", "")
                 val_key = f"{sheet_name}|{tag}"
 
                 cols = st.columns([2.2, 2.5, 4.0, 2.5, 0.7])
@@ -98,13 +87,14 @@ def show_energy_form():
                             label_visibility="collapsed",
                             placeholder=""
                         )
+                        # Kaydet
                         if new_val != current_val:
                             saved_inputs[val_key] = new_val
                             with open(SAVE_PATH, "w") as f:
                                 json.dump(saved_inputs, f)
 
                     with unit_col:
-                        if birim and birim.lower() not in ["none", "nan"]:
+                        if pd.notna(birim) and str(birim).lower() not in ['none', 'nan']:
                             st.markdown(f"**{birim}**")
                         else:
                             st.markdown("")
@@ -115,13 +105,13 @@ def show_energy_form():
 
                 if st.session_state.info_state.get(row_key, False):
                     detaylar = []
-                    if row.get("Detaylı Açıklama"):
+                    if pd.notna(row.get("Detaylı Açıklama")):
                         detaylar.append(f"🔷 **Detaylı Açıklama:** {row['Detaylı Açıklama']}")
-                    if row.get("Veri Kaynağı"):
+                    if pd.notna(row.get("Veri Kaynağı")):
                         detaylar.append(f"📌 **Kaynak:** {row['Veri Kaynağı']}")
-                    if row.get("Kayıt Aralığı"):
+                    if pd.notna(row.get("Kayıt Aralığı")):
                         detaylar.append(f"⏱️ **Kayıt Aralığı:** {row['Kayıt Aralığı']}")
-                    if row.get("Önem"):
+                    if pd.notna(row.get("Önem")):
                         detaylar.append(f"🔵 **Önem:** {int(row['Önem'])}")
                     st.info("  \n".join(detaylar))
 
@@ -133,6 +123,9 @@ def show_energy_form():
                 if önem == 1:
                     required_fields += 1
 
+    # --------------------------
+    # GİRİŞ DURUMU BİLGİSİ
+    # --------------------------
     st.sidebar.subheader("📊 Veri Giriş Durumu")
 
     pct_all = round(100 * total_filled / total_fields, 1) if total_fields else 0
