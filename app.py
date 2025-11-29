@@ -32,8 +32,8 @@ def show_form():
     if not sheets:
         return
 
-    if "clicked_info" not in st.session_state:
-        st.session_state.clicked_info = ""
+    if "info_state" not in st.session_state:
+        st.session_state.info_state = {}
 
     for sheet_idx, (sheet_name, df) in enumerate(sheets.items(), start=1):
         with st.expander(f"{sheet_idx}. {sheet_name}", expanded=(sheet_idx == 1)):
@@ -59,9 +59,10 @@ def show_form():
                     df.at[idx, col_D] = st.text_input(label="", value=str(row[col_D]) if pd.notna(row[col_D]) else "", key=f"val_{row_key}")
                 with c5:
                     if st.button("ℹ️", key=f"info_{row_key}"):
-                        st.session_state.clicked_info = row_key
+                        current = st.session_state.info_state.get(row_key, False)
+                        st.session_state.info_state[row_key] = not current
 
-                if st.session_state.clicked_info == row_key:
+                if st.session_state.info_state.get(row_key, False):
                     explanations = []
                     for dc_idx, col in enumerate(detail_cols):
                         val = row[col]
