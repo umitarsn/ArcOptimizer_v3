@@ -111,7 +111,6 @@ def show_energy_form():
                 detail_cols = df_full.columns[4:]
 
                 view_df = df_full[[col_A, col_B, col_C, col_D]].copy()
-                view_df["Info"] = [f"ℹ️ {j}" for j in range(len(view_df))]
 
                 if "Önem" in df_full.columns:
                     renk_map = {"1": "🔴", "2": "🟡", "3": ""}
@@ -125,7 +124,6 @@ def show_energy_form():
                         if not match.empty:
                             view_df.loc[idx, col_D] = match.iloc[0][col_D]
 
-                st.caption("ℹ️ Satır seçin, açıklama görüntülensin.")
                 edited_view = st.data_editor(
                     view_df,
                     use_container_width=True,
@@ -135,30 +133,24 @@ def show_energy_form():
                         col_B: st.column_config.TextColumn(disabled=True),
                         col_C: st.column_config.TextColumn(disabled=True),
                         col_D: st.column_config.TextColumn(),
-                        "Info": st.column_config.TextColumn(disabled=False),
                     },
                     key=f"sheet_{i}_view",
                 )
 
-                selected_label = st.selectbox(
-                    "Açıklama görmek için satır seçiniz:",
-                    options=[f"{row[col_A]} - {row[col_B]}" for idx, row in view_df.iterrows()],
-                    key=f"select_row_{i}"
-                )
-                selected_idx = next(idx for idx, row in view_df.iterrows()
-                                    if f"{row[col_A]} - {row[col_B]}" == selected_label)
-
-                if selected_idx is not None:
-                    detail_row = df_full.loc[selected_idx, detail_cols]
-                    details = []
-                    if pd.notna(detail_row.iloc[0]):
-                        details.append(f"🧾 **Detaylı Açıklama:** {detail_row.iloc[0]}")
-                    if len(detail_cols) > 1 and pd.notna(detail_row.iloc[1]):
-                        details.append(f"📊 **Veri Kaynağı:** {detail_row.iloc[1]}")
-                    if len(detail_cols) > 2 and pd.notna(detail_row.iloc[2]):
-                        details.append(f"⏱ **Kayıt Aralığı:** {detail_row.iloc[2]}")
-                    if details:
-                        st.info("\n\n".join(details))
+                st.markdown("ℹ️ Satıra ait detayları görmek için aşağıdan tıklayın:")
+                for idx in view_df.index:
+                    label = f"{view_df.loc[idx, col_A]} - {view_df.loc[idx, col_B]}"
+                    if st.button(f"ℹ️ {label}", key=f"info_{i}_{idx}"):
+                        detail_row = df_full.loc[idx, detail_cols]
+                        details = []
+                        if pd.notna(detail_row.iloc[0]):
+                            details.append(f"🧾 **Detaylı Açıklama:** {detail_row.iloc[0]}")
+                        if len(detail_cols) > 1 and pd.notna(detail_row.iloc[1]):
+                            details.append(f"📊 **Veri Kaynağı:** {detail_row.iloc[1]}")
+                        if len(detail_cols) > 2 and pd.notna(detail_row.iloc[2]):
+                            details.append(f"⏱ **Kayıt Aralığı:** {detail_row.iloc[2]}")
+                        if details:
+                            st.info("\n\n".join(details))
 
                 edited_sheets[sheet_name] = (df_full, edited_view, col_D)
 
