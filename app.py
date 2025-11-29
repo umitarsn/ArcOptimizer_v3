@@ -62,11 +62,15 @@ def show_energy_form():
     for sheet_idx, (sheet_name, df) in enumerate(sheets.items(), start=1):
         with st.expander(f"{sheet_idx}. {sheet_name}", expanded=(sheet_idx == 1)):
 
+            # normalize column names
+            columns_normalized = {col.strip().lower(): col for col in df.columns}
+            set_column = columns_normalized.get("set", "Set")
+
             for idx, row in df.iterrows():
                 row_key = f"{sheet_idx}_{idx}"
                 önem = int(row.get("Önem", 3))
                 renk = {1: "🔴", 2: "🟡", 3: "⚪"}.get(önem, "⚪")
-                birim = str(row.get("Set", "")).strip()
+                birim = str(row.get(set_column, "")).strip()
                 tag = row.get("Tag", "")
                 val_key = f"{sheet_name}|{tag}"
 
@@ -87,17 +91,13 @@ def show_energy_form():
                             label_visibility="collapsed",
                             placeholder=""
                         )
-                        # Kaydet
                         if new_val != current_val:
                             saved_inputs[val_key] = new_val
                             with open(SAVE_PATH, "w") as f:
                                 json.dump(saved_inputs, f)
 
                     with unit_col:
-                        if pd.notna(birim) and str(birim).lower() not in ['none', 'nan']:
-                            st.markdown(f"**{birim}**")
-                        else:
-                            st.markdown("")
+                        st.markdown(f"**{birim if birim not in ['None', 'nan'] else ''}**")
 
                 with cols[4]:
                     if st.button("ℹ️", key=f"info_{row_key}"):
