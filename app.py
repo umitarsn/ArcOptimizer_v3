@@ -8,8 +8,7 @@ import streamlit as st
 # GENEL AYARLAR
 # ----------------------------------------------
 st.set_page_config(
-    page_title="Enerji Optimizasyonu",
-    page_icon="🧠",
+    page_title="Enerji Verimliliği Formu",
     layout="wide",
 )
 
@@ -39,10 +38,10 @@ def load_sheets():
         return {}
 
 # ----------------------------------------------
-# SAYFA: Veri Girişi
+# FORM GÖSTERİMİ
 # ----------------------------------------------
-def show_data_entry():
-    st.markdown("## 🧠 1. Veri Girişi")
+def show_energy_form():
+    st.markdown("## 🧠 Enerji Verimliliği Formu")
     st.markdown("""
     Bu form **dc_saf_soru_tablosu.xlsx** dosyasına göre hazırlanmıştır.
 
@@ -62,11 +61,16 @@ def show_data_entry():
 
     for sheet_idx, (sheet_name, df) in enumerate(sheets.items(), start=1):
         with st.expander(f"{sheet_idx}. {sheet_name}", expanded=(sheet_idx == 1)):
+
+            # normalize column names
+            columns_normalized = {col.strip().lower(): col for col in df.columns}
+            set_column = columns_normalized.get("set", "Set")
+
             for idx, row in df.iterrows():
                 row_key = f"{sheet_idx}_{idx}"
                 önem = int(row.get("Önem", 3))
                 renk = {1: "🔴", 2: "🟡", 3: "⚪"}.get(önem, "⚪")
-                birim = str(row.get("Set", "")).strip()
+                birim = str(row.get(set_column, "")).strip()
                 tag = row.get("Tag", "")
                 val_key = f"{sheet_name}|{tag}"
 
@@ -93,7 +97,7 @@ def show_data_entry():
                                 json.dump(saved_inputs, f)
 
                     with unit_col:
-                        st.markdown(f"**{birim if birim.lower() not in ['none', 'nan'] else ''}**")
+                        st.markdown(f"**{birim if birim not in ['None', 'nan'] else ''}**")
 
                 with cols[4]:
                     if st.button("ℹ️", key=f"info_{row_key}"):
@@ -140,13 +144,7 @@ def show_data_entry():
 # UYGULAMA BAŞLAT
 # ----------------------------------------------
 def main():
-    menu = {
-        "1. Veri Girişi": show_data_entry,
-        # "2. Enerji Analizi": show_energy_analysis,  # Gelecekte eklenecek sayfalar için şablon
-    }
-
-    selected = st.sidebar.selectbox("Sayfa Seç", list(menu.keys()))
-    menu[selected]()
+    show_energy_form()
 
 if __name__ == "__main__":
     main()
