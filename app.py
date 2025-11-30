@@ -8,8 +8,7 @@ import streamlit as st
 # GENEL AYARLAR
 # ----------------------------------------------
 st.set_page_config(
-    page_title="Enerji Optimizasyonu",
-    page_icon="🧠",
+    page_title="1. Veri Girişi",
     layout="wide",
 )
 
@@ -39,9 +38,9 @@ def load_sheets():
         return {}
 
 # ----------------------------------------------
-# SAYFA: Veri Girişi
+# FORM GÖSTERİMİ
 # ----------------------------------------------
-def show_data_entry():
+def show_energy_form():
     st.markdown("## 🧠 1. Veri Girişi")
     st.markdown("""
     Bu form **dc_saf_soru_tablosu.xlsx** dosyasına göre hazırlanmıştır.
@@ -93,7 +92,8 @@ def show_data_entry():
                                 json.dump(saved_inputs, f)
 
                     with unit_col:
-                        st.markdown(f"**{birim if birim.lower() not in ['none', 'nan'] else ''}**")
+                        unit_text = "" if birim in ["None", "nan"] else birim
+                        st.markdown(f"**{unit_text}**")
 
                 with cols[4]:
                     if st.button("ℹ️", key=f"info_{row_key}"):
@@ -140,13 +140,7 @@ def show_data_entry():
 # UYGULAMA BAŞLAT
 # ----------------------------------------------
 def main():
-    menu = {
-        "1. Veri Girişi": show_data_entry,
-        # "2. Enerji Analizi": show_energy_analysis,  # Gelecekte eklenecek sayfalar için şablon
-    }
-
-    selected = st.sidebar.selectbox("Sayfa Seç", list(menu.keys()))
-    menu[selected]()
+    show_energy_form()
 
 if __name__ == "__main__":
     main()
