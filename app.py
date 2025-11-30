@@ -575,7 +575,19 @@ def show_arc_optimizer_page(sim_mode: bool):
         )
     )
 
-    st.altair_chart((base_chart + point_chart).interactive(), use_container_width=True)
+    # "Şimdi" dikey çizgisi (mevcut zaman)
+    now_time = datetime.now()
+    now_df = pd.DataFrame({"timestamp_dt": [now_time]})
+    now_rule = (
+        alt.Chart(now_df)
+        .mark_rule(strokeDash=[2, 2])
+        .encode(
+            x="timestamp_dt:T",
+            tooltip=[alt.Tooltip("timestamp_dt:T", title="Şimdi")],
+        )
+    )
+
+    st.altair_chart((base_chart + point_chart + now_rule).interactive(), use_container_width=True)
 
     delta_min = (predicted_tap_time - last_time).total_seconds() / 60.0
     st.markdown(
