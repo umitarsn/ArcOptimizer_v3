@@ -66,9 +66,14 @@ def show_energy_form():
                 önem = int(row.get("Önem", 3))
                 renk = {1: "🔴", 2: "🟡", 3: "⚪"}.get(önem, "⚪")
 
-                # Birim düzeltme
+                # Birim kontrolü (garantili)
                 raw_birim = row.get("Set", "")
-                birim = "" if pd.isna(raw_birim) or str(raw_birim).strip().lower() in ["none", "nan"] else str(raw_birim).strip()
+                try:
+                    birim = str(raw_birim).strip()
+                    if birim.lower() in ["", "none", "nan"]:
+                        birim = ""
+                except:
+                    birim = ""
 
                 tag = row.get("Tag", "")
                 val_key = f"{sheet_name}|{tag}"
