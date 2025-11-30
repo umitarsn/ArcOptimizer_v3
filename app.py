@@ -4,6 +4,7 @@ import random
 from datetime import datetime, timedelta
 import pandas as pd
 import streamlit as st
+import altair as alt
 
 # ----------------------------------------------
 # GENEL AYARLAR
@@ -444,12 +445,11 @@ def show_arc_optimizer_page(sim_mode: bool):
     )
 
     # -------------------------------
-    # Zaman trendi + gelecekteki tahmini döküm anı
+    # Zaman trendi + gelecekteki tahmini döküm anı (kesik çizgi)
     # -------------------------------
     trend_df = df.set_index("timestamp_dt")[["kwh_per_t", "tap_temp_c", "electrode_kg_per_heat"]]
 
-    # Tahmini döküm anı (DEMO / placeholder mantık):
-    # Son 10 şarjın süre ortalamasının %20'si kadar ileriye projekte ediyoruz (min 5 dk).
+    # Tahmini döküm anı (placeholder mantık)
     if "duration_min" in df.columns and df["duration_min"].notna().sum() > 0:
         avg_duration = last_n["duration_min"].dropna().mean()
         offset_min = max(5.0, avg_duration * 0.2)
@@ -457,9 +457,8 @@ def show_arc_optimizer_page(sim_mode: bool):
         offset_min = 10.0  # veri yoksa sabit 10 dk sonrası
 
     last_time = df["timestamp_dt"].iloc[-1]
-    predicted_tap_time = last_time + timedelta(minutes=offset_min)
 
-    # Tahmini tap sıcaklığı / kWh/t / elektrot – basit düzeltme
+    # Güvenli base fonksiyonu
     def _safe_base(val_avg, val_last, default):
         if val_avg is not None and not pd.isna(val_avg):
             return val_avg
@@ -471,32 +470,91 @@ def show_arc_optimizer_page(sim_mode: bool):
     base_kwh_t = _safe_base(avg_kwh_t, last.get("kwh_per_t", None), 420.0)
     base_electrode = _safe_base(avg_electrode, last.get("electrode_kg_per_heat", None), 2.0)
 
-    predicted_tap_temp = base_tap_temp + 5.0
-    predicted_kwh_t = base_kwh_t - 5.0
-    predicted_electrode = base_electrode
+    predicted_tap_temp_target = base_tap_temp + 5.0
+    predicted_kwh_t_target = base_kwh_t - 5.0
+    predicted_electrode_target = base_electrode
 
-    pred_row = pd.DataFrame(
-        {
-            "kwh_per_t": [predicted_kwh_t],
-            "tap_temp_c": [predicted_tap_temp],
-            "electrode_kg_per_heat": [predicted_electrode],
-        },
-        index=[predicted_tap_time],
-    )
+    # Gelecekte 3 nokta oluşturalım (kesik çizgi segmenti)
+    future_points = []
+    last_kwh = last.get("kwh_per_t", base_kwh_t)
+    last_tap_temp = last.get("tap_temp_c", base_tap_temp)
+    last_electrode = last.get("electrode_kg_per_heat", base_electrode)
 
-    trend_with_future = pd.concat([trend_df, pred_row])
+    for i in range(1, 4):
+        frac = i / 3.0
+        t = last_time + timedelta(minutes=offset_min * frac)
+        kwh_val = last_kwh + (predicted_kwh_t_target - last_kwh) * frac
+        tap_val = last_tap_temp + (predicted_tap_temp_target - last_tap_temp) * frac
+        el_val = last_electrode + (predicted_electrode_target - last_electrode) * frac
 
-    st.markdown("### Proses Gidişatı – Zaman Trendi ve Tahmini Döküm Anı (AI)")
-    st.line_chart(
-        trend_with_future.rename(
-            columns={
-                "kwh_per_t": "kWh/t",
-                "tap_temp_c": "Tap T (°C)",
-                "electrode_kg_per_heat": "Elektrot (kg/şarj)",
+        future_points.append(
+            {
+                "timestamp_dt": t,
+                "kwh_per_t": kwh_val,
+                "tap_temp_c": tap_val,
+                "electrode_kg_per_heat": el_val,
             }
         )
+
+    future_df = pd.DataFrame(future_points)
+
+    # Long form'a çevir – gerçek data
+    actual_long = (
+        trend_df.reset_index()
+        .melt(id_vars=["timestamp_dt"], value_vars=["kwh_per_t", "tap_temp_c", "electrode_kg_per_heat"],
+              var_name="variable", value_name="value")
+    )
+    actual_long["data_type"] = "Gerçek"
+
+    # Long form – tahmin data
+    future_long = (
+        future_df
+        .melt(id_vars=["timestamp_dt"], value_vars=["kwh_per_t", "tap_temp_c", "electrode_kg_per_heat"],
+              var_name="variable", value_name="value")
+    )
+    future_long["data_type"] = "Tahmin"
+
+    combined = pd.concat([actual_long, future_long], ignore_index=True)
+
+    # Daha okunur isimler
+    variable_name_map = {
+        "kwh_per_t": "kWh/t",
+        "tap_temp_c": "Tap T (°C)",
+        "electrode_kg_per_heat": "Elektrot (kg/şarj)",
+    }
+    combined["variable_name"] = combined["variable"].map(variable_name_map)
+
+    st.markdown("### Proses Gidişatı – Zaman Trendi ve Tahmini Döküm Anı (AI)")
+
+    chart = (
+        alt.Chart(combined)
+        .mark_line()
+        .encode(
+            x=alt.X("timestamp_dt:T", title="Zaman"),
+            y=alt.Y("value:Q", title=None),
+            color=alt.Color("variable_name:N", title="Değişken"),
+            strokeDash=alt.StrokeDash(
+                "data_type:N",
+                title="Veri Tipi",
+                scale=alt.Scale(
+                    domain=["Gerçek", "Tahmin"],
+                    range=[[1, 0], [6, 4]],  # Gerçek: düz, Tahmin: kesik
+                ),
+            ),
+            tooltip=[
+                alt.Tooltip("timestamp_dt:T", title="Zaman"),
+                alt.Tooltip("variable_name:N", title="Değişken"),
+                alt.Tooltip("value:Q", title="Değer", format=".2f"),
+                alt.Tooltip("data_type:N", title="Tip"),
+            ],
+        )
+        .properties(height=320)
+        .interactive()
     )
 
+    st.altair_chart(chart, use_container_width=True)
+
+    predicted_tap_time = future_points[-1]["timestamp_dt"]
     delta_min = (predicted_tap_time - last_time).total_seconds() / 60.0
     st.markdown(
         f"**Tahmini Döküm Anı (AI):** "
