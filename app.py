@@ -8,7 +8,8 @@ import streamlit as st
 # GENEL AYARLAR
 # ----------------------------------------------
 st.set_page_config(
-    page_title="BG Arc Optimizer",
+    page_title="FeCr AI",               # Sekme / iOS varsayılan adı
+    page_icon="apple-touch-icon.png",   # Repo root'taki logo
     layout="wide",
 )
 
@@ -158,7 +159,7 @@ def show_energy_form():
                 if önem == 1:
                     required_fields += 1
 
-    # Sidebar özet
+    # Sidebar özet (bu kısım sidebar içinde DEĞİL, ana body'den yönetiliyor)
     st.sidebar.subheader("📊 Veri Giriş Durumu")
 
     if total_fields > 0:
@@ -187,7 +188,7 @@ def show_energy_form():
 def show_ai_model_page():
     st.markdown("## 2. AI Model")
     st.markdown(
-        "Bu sayfada **BG Arc Optimizer** yapay zeka modelinin nasıl çalıştığı özetlenir.\n\n"
+        "Bu sayfada **FeCr AI** yapay zeka modelinin nasıl çalıştığı özetlenir.\n\n"
         "### Model Girdileri\n"
         "- Proses ve tasarım verileri\n"
         "- Şarj planı, enerji ve sıcaklık profilleri\n\n"
@@ -243,8 +244,14 @@ def show_arc_optimizer_page():
 # UYGULAMA BAŞLAT
 # ----------------------------------------------
 def main():
+    # SOL SIDEBAR: LOGO + İSİM + MENÜ
     with st.sidebar:
-        st.title("BG Arc Optimizer")
+        try:
+            st.image("apple-touch-icon.png", width=72)
+        except Exception:
+            pass  # logo bulunamazsa app yine de çalışsın
+        st.markdown("### FeCr AI")
+
         page = st.radio(
             "Sayfa Seç",
             ["1. Veri Girişi", "2. AI Model", "3. Arc Optimizer"],
@@ -259,4 +266,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
