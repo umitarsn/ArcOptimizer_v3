@@ -10,7 +10,7 @@ import altair as alt
 # GENEL AYARLAR
 # ----------------------------------------------
 st.set_page_config(
-    page_title="FeCr AI",               # Sekme / iOS varsayılan adı
+    page_title="FeCr AI",               # Sekme / iOS varsayılan adıı
     page_icon="apple-touch-icon.png",   # Proje root'taki logo dosyası
     layout="wide",
 )
