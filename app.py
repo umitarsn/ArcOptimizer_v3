@@ -8,7 +8,7 @@ import streamlit as st
 # GENEL AYARLAR
 # ----------------------------------------------
 st.set_page_config(
-    page_title="1. Veri Girişi",
+    page_title="BG Arc Optimizer",
     layout="wide",
 )
 
@@ -38,7 +38,7 @@ def load_sheets():
         return {}
 
 # ----------------------------------------------
-# FORM GÖSTERİMİ
+# 1) VERİ GİRİŞİ SAYFASI
 # ----------------------------------------------
 def show_energy_form():
     st.markdown("## 🧠 1. Veri Girişi")
@@ -62,7 +62,6 @@ def show_energy_form():
         with st.expander(f"{sheet_idx}. {sheet_name}", expanded=(sheet_idx == 1)):
 
             # ---- HER SAYFA İÇİN BİRİM KOLONUNU BUL ----
-            # Kolon isimlerini strip'le ve içinde "set" geçen ilk kolonu birim kolonu olarak al
             df.columns = [str(c).strip() for c in df.columns]
             unit_cols = [c for c in df.columns if "set" in str(c).lower()]
             unit_col_name = unit_cols[0] if unit_cols else None
@@ -155,10 +154,66 @@ def show_energy_form():
         st.sidebar.warning(f"❗ Eksik Zorunlu Değerler: {required_fields - required_filled}")
 
 # ----------------------------------------------
-# UYGULAMA BAŞLAT
+# 2) AI MODEL SAYFASI
 # ----------------------------------------------
-def main():
-    show_energy_form()
+def show_ai_model_page():
+    st.markdown("## 🤖 2. AI Model")
+    st.markdown("""
+Bu sayfada **BG Arc Optimizer** yapay zeka modelinin nasıl çalıştığı özetlenir.
 
-if __name__ == "__main__":
-    main()
+### 🔧 Model Girdileri
+- Kullanıcı / otomasyon sisteminden gelen proses verileri  
+- Fırın tasarım parametreleri  
+- Şarj planı, enerji tüketimi, sıcaklık profilleri  
+- Slag / metal banyosu ile ilgili kritik değişkenler  
+
+### 🧮 Model Adımları (örnek akış)
+1. **Veri Toplama & Temizleme**  
+   - Eksik / hatalı veriler filtrelenir, uygunsuz lotlar dışlanır.
+
+2. **Özellik Çıkarma (Feature Engineering)**  
+   - Isı girdisi, spesifik enerji, şarj başına süre, tap sıcaklığı gibi türetilmiş değişkenler hesaplanır.
+
+3. **Eğitimli Model ile Tahmin**  
+   - Regresyon / zaman serisi / gradient boosting / derin öğrenme modelleri ile:  
+     - Enerji tüketimi  
+     - Tap sıcaklığı  
+     - Elektrot tüketimi  
+     - Proses stabilitesi gibi çıktılar tahmin edilir.
+
+4. **Optimizasyon Döngüsü**  
+   - Amaç: **kWh/t minimizasyonu**, **elektrot tüketimi azaltılması**, **proses stabilitesinin artırılması**  
+   - Kısıtlar: üretim hızları, kalite limitleri, ekipman limitleri vb.
+
+5. **Operatöre Öneri**  
+   - Önerilen **Set noktaları**  
+   - Uyarı / alarm seviyeleri  
+   - “What-if” senaryoları
+
+Bu sayfaya ileride:
+- Model mimarisi şeması (blok diyagram)  
+- Eğitim / doğrulama sonuçları (R², MAPE, vb.)  
+- Örnek giriş–çıkış senaryoları  
+gibi görselleri ve tabloları ekleyebiliriz.
+""")
+
+# ----------------------------------------------
+# 3) ARC OPTIMIZER – TREND SAYFASI
+# ----------------------------------------------
+def show_arc_optimizer_page():
+    st.markdown("## 📈 3. Arc Optimizer – Trendler ve Proses Gidişatı")
+    st.markdown("""
+Bu sayfada, fırın performansını ve proses gidişatını izlemek için
+**trend grafikleri** ve **özet KPI'lar** gösterilir.
+
+Şu an demo veri kullanılıyor; otomasyon sisteminden gerçek veri
+bağlandığında aynı arayüz doğrudan kullanılabilir.
+""")
+
+    # DEMO VERİ (ileride otomasyon / veri tabanına bağlanacak)
+    tarih = pd.date_range(end=datetime.now(), periods=24, freq="H")
+    demo_df = pd.DataFrame(
+        {
+            "Spesifik Enerji (kWh/t)": 420 + 15 * pd.Series(range(24)).rolling(3, min_periods=1).mean(),
+            "Tap Sıcaklığı (°C)": 1610 + 5 * pd.Series(range(24)).rolling(4, min_periods=1).mean(),
+            "Elektrot Tüketimi (kg/şarj)": 1.8 +
