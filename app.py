@@ -1,6 +1,7 @@
 import os
 import json
-from datetime import datetime
+import random
+from datetime import datetime, timedelta
 import pandas as pd
 import streamlit as st
 
@@ -54,6 +55,47 @@ def save_runtime_data(data_list):
         st.error(f"Runtime verileri kaydedilemedi: {e}")
 
 runtime_data = load_runtime_data()
+
+# ----------------------------------------------
+# DEMO RUNTIME VERİ ÜRETİCİSİ
+# ----------------------------------------------
+def generate_demo_runtime_data(n=15):
+    """Demo modu için örnek şarj datası üretir."""
+    demo_list = []
+    now = datetime.now()
+
+    for i in range(n):
+        ts = now - timedelta(hours=(n - i))
+        heat_id = f"DEMO-{i+1}"
+
+        tap_weight = 35 + random.uniform(-3, 3)       # ton
+        kwh_per_t = 420 + random.uniform(-25, 25)     # kWh/t
+        energy_kwh = tap_weight * kwh_per_t
+        duration_min = 55 + random.uniform(-10, 10)   # dk
+        tap_temp = 1610 + random.uniform(-15, 15)     # °C
+        o2_flow = 950 + random.uniform(-150, 150)     # Nm3/h
+        slag_foaming = random.randint(3, 9)           # 0–10
+        panel_delta_t = 18 + random.uniform(-5, 8)    # °C
+        electrode_cons = 1.9 + random.uniform(-0.3, 0.3)  # kg/şarj
+
+        demo_list.append(
+            {
+                "timestamp": ts.isoformat(),
+                "heat_id": heat_id,
+                "tap_weight_t": tap_weight,
+                "duration_min": duration_min,
+                "energy_kwh": energy_kwh,
+                "tap_temp_c": tap_temp,
+                "o2_flow_nm3h": o2_flow,
+                "slag_foaming_index": slag_foaming,
+                "panel_delta_t_c": panel_delta_t,
+                "electrode_kg_per_heat": electrode_cons,
+                "kwh_per_t": kwh_per_t,
+                "operator_note": "Demo kaydı",
+            }
+        )
+
+    return demo_list
 
 # ----------------------------------------------
 # EXCEL OKUMA (SETUP SAYFASI İÇİN)
@@ -215,8 +257,12 @@ def show_setup_form():
 # ----------------------------------------------
 # 2) CANLI VERİ SAYFASI – ŞARJ BAZLI ANLIK VERİ
 # ----------------------------------------------
-def show_runtime_page():
+def show_runtime_page(demo_mode: bool):
     st.markdown("## 2. Canlı Veri – Şarj Bazlı Anlık Veriler")
+    if demo_mode:
+        st.info("🧪 **Demo modu aktif.** Aşağıda gösterilen veriler örnek (demo) kayıtlardır. "
+                "Bu modda formdan girilen yeni veriler dosyaya kaydedilmez.")
+
     st.markdown(
         "Bu sayfada fırın işletmesi sırasında her **şarj / heat** için toplanan "
         "operasyonel veriler girilir veya otomasyon sisteminden okunur."
@@ -257,34 +303,42 @@ def show_runtime_page():
         if not heat_id:
             st.error("Heat ID / Şarj No girilmesi zorunludur.")
         else:
-            now = datetime.now().isoformat()
-            kwh_per_t = energy_kwh / tap_weight if tap_weight > 0 else None
+            if demo_mode:
+                st.warning("Demo modunda veri kaydı yapılmaz. Bu giriş sadece test içindir.")
+            else:
+                now = datetime.now().isoformat()
+                kwh_per_t = energy_kwh / tap_weight if tap_weight > 0 else None
 
-            new_entry = {
-                "timestamp": now,
-                "heat_id": heat_id,
-                "tap_weight_t": tap_weight,
-                "duration_min": duration_min,
-                "energy_kwh": energy_kwh,
-                "tap_temp_c": tap_temp,
-                "o2_flow_nm3h": o2_flow,
-                "slag_foaming_index": slag_foaming,
-                "panel_delta_t_c": panel_delta_t,
-                "electrode_kg_per_heat": electrode_cons,
-                "kwh_per_t": kwh_per_t,
-                "operator_note": note,
-            }
+                new_entry = {
+                    "timestamp": now,
+                    "heat_id": heat_id,
+                    "tap_weight_t": tap_weight,
+                    "duration_min": duration_min,
+                    "energy_kwh": energy_kwh,
+                    "tap_temp_c": tap_temp,
+                    "o2_flow_nm3h": o2_flow,
+                    "slag_foaming_index": slag_foaming,
+                    "panel_delta_t_c": panel_delta_t,
+                    "electrode_kg_per_heat": electrode_cons,
+                    "kwh_per_t": kwh_per_t,
+                    "operator_note": note,
+                }
 
-            runtime_data.append(new_entry)
-            save_runtime_data(runtime_data)
-            st.success(f"Şarj kaydı eklendi: {heat_id}")
+                runtime_data.append(new_entry)
+                save_runtime_data(runtime_data)
+                st.success(f"Şarj kaydı eklendi: {heat_id}")
 
-    # Kayıtlı runtime verileri tablo + basit grafik olarak göster
-    if not runtime_data:
+    # Gösterilecek veri kaynağı: demo mu gerçek mi?
+    if demo_mode:
+        data_source = generate_demo_runtime_data()
+    else:
+        data_source = runtime_data
+
+    if not data_source:
         st.info("Henüz canlı veri girilmemiş.")
         return
 
-    df = pd.DataFrame(runtime_data)
+    df = pd.DataFrame(data_source)
     # timestamp’i datetime’a çevir
     try:
         df["timestamp_dt"] = pd.to_datetime(df["timestamp"])
@@ -292,7 +346,7 @@ def show_runtime_page():
     except Exception:
         df["timestamp_dt"] = df["timestamp"]
 
-    st.markdown("### Kayıtlı Canlı Veriler (Runtime)")
+    st.markdown("### Kayıtlı Canlı Veriler")
     st.dataframe(
         df[
             [
@@ -331,19 +385,28 @@ def show_runtime_page():
 # ----------------------------------------------
 # 3) ARC OPTIMIZER SAYFASI – MODEL OUTPUT & INSIGHTS
 # ----------------------------------------------
-def show_arc_optimizer_page():
+def show_arc_optimizer_page(demo_mode: bool):
     st.markdown("## 3. Arc Optimizer – Trendler, KPI ve Öneriler")
-    st.markdown(
-        "Bu sayfa, canlı veriler üzerinden **enerji verimliliği**, "
-        "**elektrot tüketimi** ve **proses stabilitesi** ile ilgili özet KPI ve "
-        "modelin önerilerini gösterir."
-    )
+    if demo_mode:
+        st.info("🧪 **Demo modu aktif.** Arc Optimizer çıktıları demo datası üzerinden hesaplanmaktadır.")
+    else:
+        st.markdown(
+            "Bu sayfa, canlı veriler üzerinden **enerji verimliliği**, "
+            "**elektrot tüketimi** ve **proses stabilitesi** ile ilgili özet KPI ve "
+            "modelin önerilerini gösterir."
+        )
 
-    if not runtime_data:
+    # Veri kaynağı seçimi
+    if demo_mode:
+        data_source = generate_demo_runtime_data()
+    else:
+        data_source = runtime_data
+
+    if not data_source:
         st.info("Arc Optimizer çıktıları için henüz canlı veri yok. Önce 2. sayfadan veri ekleyin.")
         return
 
-    df = pd.DataFrame(runtime_data)
+    df = pd.DataFrame(data_source)
     try:
         df["timestamp_dt"] = pd.to_datetime(df["timestamp"])
         df = df.sort_values("timestamp_dt")
@@ -359,7 +422,7 @@ def show_arc_optimizer_page():
     avg_electrode = last_n["electrode_kg_per_heat"].dropna().mean()
     avg_tap_temp = last_n["tap_temp_c"].dropna().mean()
 
-    # Basit "iyileşme potansiyeli" hesabı (tamamen örnek / placeholder)
+    # Basit "iyileşme potansiyeli" hesabı (placeholder)
     if len(df) >= 10 and df["kwh_per_t"].notna().sum() >= 10:
         first5 = df["kwh_per_t"].dropna().head(5).mean()
         last5 = df["kwh_per_t"].dropna().tail(5).mean()
@@ -413,6 +476,12 @@ def show_arc_optimizer_page():
             "💧 Panel ΔT yüksek. Soğutma devresinde dengesizlik olabilir; panel debilerini kontrol edin."
         )
 
+    if saving_potential > 0.0:
+        suggestions.append(
+            f"📉 Son trendlere göre, kWh/t değerinde yaklaşık **{saving_potential:.1f} kWh/t** "
+            "iyileştirme potansiyeli görülüyor."
+        )
+
     if not suggestions:
         suggestions.append(
             "✅ Model açısından belirgin bir anomali veya iyileştirme alarmı görülmüyor. "
@@ -426,13 +495,15 @@ def show_arc_optimizer_page():
 # UYGULAMA BAŞLAT
 # ----------------------------------------------
 def main():
-    # SOL SIDEBAR: LOGO + İSİM + MENÜ
+    # SOL SIDEBAR: LOGO + İSİM + DEMO MODU + MENÜ
     with st.sidebar:
         try:
             st.image("apple-touch-icon.png", width=72)
         except Exception:
             pass  # logo bulunamazsa app yine de çalışsın
         st.markdown("### FeCr AI")
+
+        demo_mode = st.toggle("Demo Modu", value=False, help="Açıkken demo veri seti kullanılır.")
 
         page = st.radio(
             "Sayfa Seç",
@@ -442,9 +513,9 @@ def main():
     if page == "1. Setup":
         show_setup_form()
     elif page == "2. Canlı Veri":
-        show_runtime_page()
+        show_runtime_page(demo_mode)
     elif page == "3. Arc Optimizer":
-        show_arc_optimizer_page()
+        show_arc_optimizer_page(demo_mode)
 
 if __name__ == "__main__":
     main()
