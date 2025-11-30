@@ -8,7 +8,7 @@ import streamlit as st
 # GENEL AYARLAR
 # ----------------------------------------------
 st.set_page_config(
-    page_title="1. Veri Girişi",
+    page_title="Enerji Verimliliği Formu",
     layout="wide",
 )
 
@@ -61,14 +61,16 @@ def show_energy_form():
 
     for sheet_idx, (sheet_name, df) in enumerate(sheets.items(), start=1):
         with st.expander(f"{sheet_idx}. {sheet_name}", expanded=(sheet_idx == 1)):
+
             for idx, row in df.iterrows():
                 row_key = f"{sheet_idx}_{idx}"
+                
                 önem = int(row.get("Önem", 3))
                 renk = {1: "🔴", 2: "🟡", 3: "⚪"}.get(önem, "⚪")
-                birim = str(row.get("Set", "")).strip()
-                birim = "" if birim.lower() in ["none", "nan"] else birim
+                raw_birim = row.get("Set", "")
+                birim = str(raw_birim).strip() if pd.notna(raw_birim) else ""
                 tag = row.get("Tag", "")
-                val_key = f"{sheet_name}|{tag}|{idx}"  # benzersiz key
+                val_key = f"{sheet_name}|{tag}"
 
                 cols = st.columns([2.2, 2.5, 4.0, 2.5, 0.7])
                 cols[0].markdown(f"**{tag}**")
@@ -87,6 +89,7 @@ def show_energy_form():
                             label_visibility="collapsed",
                             placeholder=""
                         )
+                        # Kaydet
                         if new_val != current_val:
                             saved_inputs[val_key] = new_val
                             with open(SAVE_PATH, "w") as f:
@@ -102,13 +105,13 @@ def show_energy_form():
                 if st.session_state.info_state.get(row_key, False):
                     detaylar = []
                     if pd.notna(row.get("Detaylı Açıklama")):
-                        detaylar.append(f"🔷 **Detaylı Açıklama:** {row['Detaylı Açıklama']}")
+                        detaylar.append(f"🔹 **Detaylı Açıklama:** {row['Detaylı Açıklama']}")
                     if pd.notna(row.get("Veri Kaynağı")):
-                        detaylar.append(f"📌 **Kaynak:** {row['Veri Kaynağı']}")
+                        detaylar.append(f"🔹 **Kaynak:** {row['Veri Kaynağı']}")
                     if pd.notna(row.get("Kayıt Aralığı")):
-                        detaylar.append(f"⏱️ **Kayıt Aralığı:** {row['Kayıt Aralığı']}")
+                        detaylar.append(f"🔹 **Kayıt Aralığı:** {row['Kayıt Aralığı']}")
                     if pd.notna(row.get("Önem")):
-                        detaylar.append(f"🔵 **Önem:** {int(row['Önem'])}")
+                        detaylar.append(f"🔹 **Önem:** {int(row['Önem'])}")
                     st.info("  \n".join(detaylar))
 
                 total_fields += 1
@@ -122,7 +125,7 @@ def show_energy_form():
     # --------------------------
     # GİRİŞ DURUMU BİLGİSİ
     # --------------------------
-    st.sidebar.subheader("📊 Veri Giriş Durumu")
+    st.sidebar.subheader("📊 Veri Girişi Durumu")
 
     pct_all = round(100 * total_filled / total_fields, 1) if total_fields else 0
     pct_required = round(100 * required_filled / required_fields, 1) if required_fields else 0
