@@ -1,6 +1,5 @@
 import os
 import json
-from datetime import datetime
 import pandas as pd
 import streamlit as st
 
@@ -41,13 +40,12 @@ def load_sheets():
 # FORM GÖSTERİMİ
 # ----------------------------------------------
 def show_energy_form():
-    st.markdown("## 🧠 1. Veri Girişi")
-    st.markdown("""
-    Bu form **dc_saf_soru_tablosu.xlsx** dosyasına göre hazırlanmıştır.
+    st.markdown("## 🧐 1. Veri Girişi")
+    st.markdown("""Bu form **dc_saf_soru_tablosu.xlsx** dosyasına göre hazırlanmıştır.
 
-    1. Girişi sadece **Set Değeri** alanına yapınız.  
-    2. 🔴 Zorunlu (Önem: 1), 🟡 Faydalı (Önem: 2), ⚪ Opsiyonel (Önem: 3) olarak belirtilmiştir.  
-    3. Detaylı bilgi ve açıklama için ℹ️ simgesine tıklayınız.
+1. Girişi sadece **Set Değeri** alanına yapınız.  
+2. 🔴 Zorunlu (Önem: 1), 🟡 Faydalı (Önem: 2), \26aa Opsiyonel (Önem: 3) olarak belirtilmiştir.  
+3. Detaylı bilgi ve açıklama için ℹ️ simgesine tıklayınız.
     """)
 
     sheets = load_sheets()
@@ -61,12 +59,15 @@ def show_energy_form():
 
     for sheet_idx, (sheet_name, df) in enumerate(sheets.items(), start=1):
         with st.expander(f"{sheet_idx}. {sheet_name}", expanded=(sheet_idx == 1)):
+            df = df.replace({pd.NA: None})
+
             for idx, row in df.iterrows():
                 row_key = f"{sheet_idx}_{idx}"
-                önem = int(row.get("Önem", 3))
+                önem = int(row.get("Önem") or 3)
                 renk = {1: "🔴", 2: "🟡", 3: "⚪"}.get(önem, "⚪")
-                birim = str(row.get("Set", "")).strip()
-                tag = row.get("Tag", "")
+                birim = str(row.get("Set") or "").strip()
+
+                tag = row.get("Tag") or ""
                 val_key = f"{sheet_name}|{tag}"
 
                 cols = st.columns([2.2, 2.5, 4.0, 2.5, 0.7])
@@ -92,8 +93,8 @@ def show_energy_form():
                                 json.dump(saved_inputs, f)
 
                     with unit_col:
-                        unit_text = "" if birim in ["None", "nan"] else birim
-                        st.markdown(f"**{unit_text}**")
+                        if birim.lower() not in ["", "none", "nan"]:
+                            st.markdown(f"**{birim}**")
 
                 with cols[4]:
                     if st.button("ℹ️", key=f"info_{row_key}"):
@@ -101,13 +102,13 @@ def show_energy_form():
 
                 if st.session_state.info_state.get(row_key, False):
                     detaylar = []
-                    if pd.notna(row.get("Detaylı Açıklama")):
+                    if row.get("Detaylı Açıklama"):
                         detaylar.append(f"🔷 **Detaylı Açıklama:** {row['Detaylı Açıklama']}")
-                    if pd.notna(row.get("Veri Kaynağı")):
+                    if row.get("Veri Kaynağı"):
                         detaylar.append(f"📌 **Kaynak:** {row['Veri Kaynağı']}")
-                    if pd.notna(row.get("Kayıt Aralığı")):
+                    if row.get("Kayıt Aralığı"):
                         detaylar.append(f"⏱️ **Kayıt Aralığı:** {row['Kayıt Aralığı']}")
-                    if pd.notna(row.get("Önem")):
+                    if row.get("Önem") is not None:
                         detaylar.append(f"🔵 **Önem:** {int(row['Önem'])}")
                     st.info("  \n".join(detaylar))
 
@@ -119,28 +120,6 @@ def show_energy_form():
                 if önem == 1:
                     required_fields += 1
 
-    # --------------------------
-    # GİRİŞ DURUMU BİLGİSİ
-    # --------------------------
-    st.sidebar.subheader("📊 Veri Giriş Durumu")
-
+    st.sidebar.subheader("📊 Veri Girişi Durumu")
     pct_all = round(100 * total_filled / total_fields, 1) if total_fields else 0
-    pct_required = round(100 * required_filled / required_fields, 1) if required_fields else 0
-
-    st.sidebar.metric("Toplam Giriş Oranı", f"{pct_all}%")
-    st.sidebar.progress(pct_all / 100)
-
-    st.sidebar.metric("Zorunlu Veri Girişi", f"{pct_required}%")
-    st.sidebar.progress(min(pct_required / 100, 1.0))
-
-    if required_fields - required_filled > 0:
-        st.sidebar.warning(f"❗ Eksik Zorunlu Değerler: {required_fields - required_filled}")
-
-# ----------------------------------------------
-# UYGULAMA BAŞLAT
-# ----------------------------------------------
-def main():
-    show_energy_form()
-
-if __name__ == "__main__":
-    main()
+    pct_required = round(100 * required_filled / required_fields,
