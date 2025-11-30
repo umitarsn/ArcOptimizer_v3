@@ -446,17 +446,19 @@ def show_arc_optimizer_page(sim_mode: bool):
 
     # -------------------------------
     # Zaman trendi + gelecekteki tahmini döküm anı (kesik çizgi)
+    # Şimdiki an (son şarj) x-ekseni ~%60'ında olacak şekilde future span ayarlanıyor
     # -------------------------------
     trend_df = df.set_index("timestamp_dt")[["kwh_per_t", "tap_temp_c", "electrode_kg_per_heat"]]
 
-    # Tahmini döküm anı (placeholder mantık)
-    if "duration_min" in df.columns and df["duration_min"].notna().sum() > 0:
-        avg_duration = last_n["duration_min"].dropna().mean()
-        offset_min = max(5.0, avg_duration * 0.2)
-    else:
-        offset_min = 10.0  # veri yoksa sabit 10 dk sonrası
+    min_time = df["timestamp_dt"].min()
+    last_time = df["timestamp_dt"].max()
+    real_span = last_time - min_time
+    if real_span.total_seconds() <= 0:
+        real_span = timedelta(minutes=60)
 
-    last_time = df["timestamp_dt"].iloc[-1]
+    # Gerçek 60%, tahmin 40% olacak şekilde:
+    future_span = real_span * (0.4 / 0.6)  # yaklaşık 2/3'ü kadar ileri
+    future_end = last_time + future_span
 
     # Güvenli base fonksiyonu
     def _safe_base(val_avg, val_last, default):
@@ -474,7 +476,7 @@ def show_arc_optimizer_page(sim_mode: bool):
     predicted_kwh_t_target = base_kwh_t - 5.0
     predicted_electrode_target = base_electrode
 
-    # Gelecekte 3 nokta oluşturalım (kesik çizgi segmenti)
+    # Gelecekte 3 nokta oluşturalım (son nokta = tahmini döküm anı, grafiğin sonu)
     future_points = []
     last_kwh = last.get("kwh_per_t", base_kwh_t)
     last_tap_temp = last.get("tap_temp_c", base_tap_temp)
@@ -482,7 +484,7 @@ def show_arc_optimizer_page(sim_mode: bool):
 
     for i in range(1, 4):
         frac = i / 3.0
-        t = last_time + timedelta(minutes=offset_min * frac)
+        t = last_time + future_span * frac
         kwh_val = last_kwh + (predicted_kwh_t_target - last_kwh) * frac
         tap_val = last_tap_temp + (predicted_tap_temp_target - last_tap_temp) * frac
         el_val = last_electrode + (predicted_electrode_target - last_electrode) * frac
@@ -497,6 +499,7 @@ def show_arc_optimizer_page(sim_mode: bool):
         )
 
     future_df = pd.DataFrame(future_points)
+    predicted_tap_time = future_points[-1]["timestamp_dt"]
 
     # Long form'a çevir – gerçek data
     actual_long = (
@@ -526,7 +529,7 @@ def show_arc_optimizer_page(sim_mode: bool):
 
     st.markdown("### Proses Gidişatı – Zaman Trendi ve Tahmini Döküm Anı (AI)")
 
-    chart = (
+    base_chart = (
         alt.Chart(combined)
         .mark_line()
         .encode(
@@ -549,12 +552,31 @@ def show_arc_optimizer_page(sim_mode: bool):
             ],
         )
         .properties(height=320)
-        .interactive()
     )
 
-    st.altair_chart(chart, use_container_width=True)
+    # Tahmin edilen döküm sıcaklığı (Tap T) için içi dolu nokta
+    tap_point_df = future_long[
+        (future_long["variable"] == "tap_temp_c")
+        & (future_long["timestamp_dt"] == predicted_tap_time)
+    ].copy()
+    tap_point_df["variable_name"] = "Tap T (°C)"
 
-    predicted_tap_time = future_points[-1]["timestamp_dt"]
+    point_chart = (
+        alt.Chart(tap_point_df)
+        .mark_point(size=90, filled=True)
+        .encode(
+            x="timestamp_dt:T",
+            y="value:Q",
+            color=alt.Color("variable_name:N", legend=None),
+            tooltip=[
+                alt.Tooltip("timestamp_dt:T", title="Tahmini Döküm Zamanı"),
+                alt.Tooltip("value:Q", title="Tahmini Tap T (°C)", format=".1f"),
+            ],
+        )
+    )
+
+    st.altair_chart((base_chart + point_chart).interactive(), use_container_width=True)
+
     delta_min = (predicted_tap_time - last_time).total_seconds() / 60.0
     st.markdown(
         f"**Tahmini Döküm Anı (AI):** "
