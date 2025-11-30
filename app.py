@@ -61,17 +61,28 @@ def show_energy_form():
     for sheet_idx, (sheet_name, df) in enumerate(sheets.items(), start=1):
         with st.expander(f"{sheet_idx}. {sheet_name}", expanded=(sheet_idx == 1)):
 
+            # ---- HER SAYFA İÇİN BİRİM KOLONUNU BUL ----
+            # Kolon isimlerini strip'le ve içinde "set" geçen ilk kolonu birim kolonu olarak al
+            df.columns = [str(c).strip() for c in df.columns]
+            unit_cols = [c for c in df.columns if "set" in str(c).lower()]
+            unit_col_name = unit_cols[0] if unit_cols else None
+
             for idx, row in df.iterrows():
                 row_key = f"{sheet_idx}_{idx}"
                 önem = int(row.get("Önem", 3))
                 renk = {1: "🔴", 2: "🟡", 3: "⚪"}.get(önem, "⚪")
 
-                raw_birim = row.get("Set", "")
+                # --- SABİT "Set" YERİNE DİNAMİK BİRİM KOLONU KULLAN ---
+                if unit_col_name:
+                    raw_birim = row.get(unit_col_name, "")
+                else:
+                    raw_birim = ""
+
                 try:
                     birim = str(raw_birim).strip()
                     if birim.lower() in ["", "none", "nan"]:
                         birim = ""
-                except:
+                except Exception:
                     birim = ""
 
                 tag = row.get("Tag", "")
@@ -119,7 +130,7 @@ def show_energy_form():
                     st.info("  \n".join(detaylar))
 
                 total_fields += 1
-                if new_val.strip():
+                if str(saved_inputs.get(val_key, "")).strip():
                     total_filled += 1
                     if önem == 1:
                         required_filled += 1
