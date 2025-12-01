@@ -406,7 +406,7 @@ def show_arc_optimizer_page(sim_mode: bool):
     if real_span.total_seconds() <= 0:
         real_span = timedelta(minutes=60)
 
-    # TAHMİN ARALIĞI → gerçek span'in %20'si kadar ileri: çok sağa yaslanmasın
+    # İleri tahmin aralığı: gerçek span'in %20'si kadar
     future_span = real_span * 0.20
 
     def _safe_base(val_avg, val_last, default):
@@ -456,7 +456,6 @@ def show_arc_optimizer_page(sim_mode: bool):
             value_name="value",
         )
     )
-    # Çizgi tipi: Aktüel
     actual_long["data_type"] = "Aktüel"
 
     future_long = (
@@ -468,7 +467,6 @@ def show_arc_optimizer_page(sim_mode: bool):
             value_name="value",
         )
     )
-    # Çizgi tipi: Potansiyel (AI)
     future_long["data_type"] = "Potansiyel (AI)"
 
     combined = pd.concat([actual_long, future_long], ignore_index=True)
@@ -480,9 +478,16 @@ def show_arc_optimizer_page(sim_mode: bool):
     }
     combined["variable_name"] = combined["variable"].map(variable_name_map)
 
-    # x-ekseni domain'i: tüm veri (aktüel + tahmin) → tahmini nokta her zaman görünür
-    domain_min = combined["timestamp_dt"].min()
-    domain_max = combined["timestamp_dt"].max()
+    # --- TAHMİNİ NOKTAYI ZAMAN EKSENİNİN %90'INA YERLEŞTİR ---
+    # min_time = domain başlangıcı
+    # predicted_tap_time alanın %90'ında olsun
+    domain_min = min_time
+    # Güvenlik için, predicted_tap_time min_time'dan büyükse hesap yap
+    if predicted_tap_time > domain_min:
+        domain_max = domain_min + (predicted_tap_time - domain_min) / 0.9
+    else:
+        # edge case: tüm timestamp'ler aynıysa
+        domain_max = domain_min + timedelta(minutes=60)
 
     st.markdown("### Proses Gidişatı – Zaman Trendi ve Tahmini Döküm Anı (AI)")
 
@@ -515,10 +520,11 @@ def show_arc_optimizer_page(sim_mode: bool):
         .properties(height=320)
     )
 
-    tap_point_df = future_long[
-        (future_long["variable"] == "tap_temp_c")
-        & (future_long["timestamp_dt"] == predicted_tap_time)
-    ].copy()
+    # Tahmini nokta: Tap T çizgisinin son tahmin değeri
+    tap_point_df = future_df[
+        future_df["timestamp_dt"] == predicted_tap_time
+    ][["timestamp_dt", "tap_temp_c"]].copy()
+    tap_point_df.rename(columns={"tap_temp_c": "value"}, inplace=True)
     tap_point_df["variable_name"] = "Tap T (°C)"
 
     point_chart = (
@@ -549,8 +555,8 @@ def show_arc_optimizer_page(sim_mode: bool):
         alt.Chart(label_df)
         .mark_text(
             align="left",
-            dx=10,
-            dy=-25,
+            dx=35,   # biraz sağa
+            dy=-35,  # biraz yukarı
             fontSize=12,
             fontWeight="bold",
         )
@@ -565,8 +571,8 @@ def show_arc_optimizer_page(sim_mode: bool):
         alt.Chart(label_df)
         .mark_text(
             align="left",
-            dx=10,
-            dy=0,
+            dx=35,
+            dy=-10,
             fontSize=11,
         )
         .encode(
@@ -592,7 +598,7 @@ def show_arc_optimizer_page(sim_mode: bool):
         + now_rule
         + label_top_chart
         + label_bottom_chart
-    ).properties(padding={"right": 80})
+    ).properties(padding={"right": 160})
 
     st.altair_chart(full_chart.interactive(), use_container_width=True)
 
