@@ -24,6 +24,16 @@ RUNTIME_SAVE_PATH = "data/runtime_data.json"
 os.makedirs("data", exist_ok=True)
 
 # ----------------------------------------------
+# GLOBAL STATE
+# ----------------------------------------------
+if "info_state" not in st.session_state:
+    st.session_state.info_state = {}
+
+# kâr tablosu info durumları (burada tutacağız)
+if "profit_info_state" not in st.session_state:
+    st.session_state.profit_info_state = {}
+
+# ----------------------------------------------
 # KAYITLI SETUP VERİLERİ
 # ----------------------------------------------
 if os.path.exists(SETUP_SAVE_PATH):
@@ -31,9 +41,6 @@ if os.path.exists(SETUP_SAVE_PATH):
         saved_inputs = json.load(f)
 else:
     saved_inputs = {}
-
-if "info_state" not in st.session_state:
-    st.session_state.info_state = {}
 
 # ----------------------------------------------
 # RUNTIME VERİLERİ
@@ -690,6 +697,8 @@ def show_arc_optimizer_page(sim_mode: bool):
     hcols[5].markdown("**Tahmini Kazanç (€/t)**")
     hcols[6].markdown("")
 
+    profit_state = st.session_state.profit_info_state  # kısayol
+
     for row in rows:
         cols = st.columns(widths)
         cols[0].markdown(row["tag"])
@@ -698,9 +707,11 @@ def show_arc_optimizer_page(sim_mode: bool):
         cols[3].markdown(row["pot"])
         cols[4].markdown(row["fark"])
         cols[5].markdown(row["kazanc"])
-        info_key = f"profit_info_{row['tag']}"
-        if cols[6].button("ℹ️", key=info_key):
-            st.session_state[info_key] = not st.session_state.get(info_key, False)
+
+        # BUTON KEY ve STATE KEY AYRI!
+        btn_key = f"profit_info_btn_{row['tag']}"
+        if cols[6].button("ℹ️", key=btn_key):
+            profit_state[row["tag"]] = not profit_state.get(row["tag"], False)
 
     st.markdown(
         f"**Toplam Potansiyel Kazanç (AI tahmini, ton başına):** ≈ **{total_gain_per_t:,.1f} €/t**"
@@ -708,8 +719,7 @@ def show_arc_optimizer_page(sim_mode: bool):
 
     # Satır bazlı açıklamalar
     for row in rows:
-        info_key = f"profit_info_{row['tag']}"
-        if st.session_state.get(info_key, False):
+        if profit_state.get(row["tag"], False):
             if row["tag"] == "kwh_per_t":
                 st.info(
                     "**Enerji tüketimi (kwh_per_t)**\n\n"
