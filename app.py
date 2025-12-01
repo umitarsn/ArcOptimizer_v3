@@ -58,7 +58,6 @@ def save_runtime_data(data_list):
         with open(RUNTIME_SAVE_PATH, "w", encoding="utf-8") as f:
             json.dump(data_list, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        # Streamlit yoksa da patlamasın
         try:
             st.error(f"Runtime verileri kaydedilemedi: {e}")
         except Exception:
@@ -594,8 +593,8 @@ def show_arc_optimizer_page(sim_mode: bool):
         alt.Chart(label_df)
         .mark_text(
             align="left",
-            dx=35,   # sağa
-            dy=-35,  # yukarı
+            dx=35,
+            dy=-35,
             fontSize=12,
             fontWeight="bold",
         )
@@ -663,12 +662,13 @@ def show_arc_optimizer_page(sim_mode: bool):
     rows = []
     total_gain_per_t = 0.0
 
-    # Enerji tüketimi (doğrudan)
+    # Enerji tüketimi (her durumda € hesapla – farkın mutlak değeri)
     if pd.notna(last.get("kwh_per_t", None)) and avg_kwh_t and not pd.isna(avg_kwh_t):
         real_kwh_t = float(last["kwh_per_t"])
         target_kwh_t = max(avg_kwh_t - 5.0, 0.0)
         diff_kwh_t = real_kwh_t - target_kwh_t
-        gain_kwh_per_t = max(0.0, diff_kwh_t) * ENERGY_PRICE_EUR_PER_KWH
+        # Potansiyel / risk büyüklüğü: mutlak fark × enerji fiyatı
+        gain_kwh_per_t = abs(diff_kwh_t) * ENERGY_PRICE_EUR_PER_KWH
         total_gain_per_t += gain_kwh_per_t
         rows.append(
             {
@@ -677,13 +677,11 @@ def show_arc_optimizer_page(sim_mode: bool):
                 "Aktüel": f"{real_kwh_t:.1f} kWh/t",
                 "Potansiyel (AI)": f"{target_kwh_t:.1f} kWh/t",
                 "Fark": f"{diff_kwh_t:+.1f} kWh/t",
-                "Tahmini Kazanç (€/t)": f"{gain_kwh_per_t:.1f} €/t"
-                if gain_kwh_per_t > 0
-                else "-",
+                "Tahmini Kazanç (€/t)": f"{gain_kwh_per_t:.2f} €/t",
             }
         )
 
-    # Elektrot tüketimi (doğrudan)
+    # Elektrot tüketimi (her durumda € hesapla – farkın mutlak değeri)
     if pd.notna(last.get("electrode_kg_per_heat", None)) and pd.notna(
         last.get("tap_weight_t", None)
     ):
@@ -694,10 +692,10 @@ def show_arc_optimizer_page(sim_mode: bool):
                 target_electrode_per_t = max(avg_electrode / tap_weight, 0.0)
             else:
                 target_electrode_per_t = max(real_electrode_per_t - 0.05, 0.0)
+
             diff_electrode_per_t = real_electrode_per_t - target_electrode_per_t
-            gain_electrode_per_t = (
-                max(0.0, diff_electrode_per_t) * ELECTRODE_PRICE_EUR_PER_KG
-            )
+            # Potansiyel / risk büyüklüğü: mutlak fark × elektrot €/kg
+            gain_electrode_per_t = abs(diff_electrode_per_t) * ELECTRODE_PRICE_EUR_PER_KG
             total_gain_per_t += gain_electrode_per_t
             rows.append(
                 {
@@ -706,9 +704,7 @@ def show_arc_optimizer_page(sim_mode: bool):
                     "Aktüel": f"{real_electrode_per_t:.3f} kg/t",
                     "Potansiyel (AI)": f"{target_electrode_per_t:.3f} kg/t",
                     "Fark": f"{diff_electrode_per_t:+.3f} kg/t",
-                    "Tahmini Kazanç (€/t)": f"{gain_electrode_per_t:.1f} €/t"
-                    if gain_electrode_per_t > 0
-                    else "-",
+                    "Tahmini Kazanç (€/t)": f"{gain_electrode_per_t:.2f} €/t",
                 }
             )
 
@@ -760,7 +756,6 @@ def show_arc_optimizer_page(sim_mode: bool):
         target_slag = 7.0
         diff_slag = real_slag - target_slag
         gain_slag_per_t = abs(diff_slag) * SLAG_FOAMING_COST_PER_INDEX
-        # Burada "sapmayı 0'a çekersek şu kadar kazanç" mantığı var
         total_gain_per_t += gain_slag_per_t
         rows.append(
             {
@@ -797,9 +792,53 @@ def show_arc_optimizer_page(sim_mode: bool):
         columns=["Tag", "Değişken", "Aktüel", "Potansiyel (AI)", "Fark", "Tahmini Kazanç (€/t)"],
     )
     st.dataframe(profit_df, use_container_width=True, hide_index=True)
+
     st.markdown(
         f"**Toplam Potansiyel Kazanç (AI tahmini, ton başına):** ≈ **{total_gain_per_t:,.1f} €/t**"
     )
+
+    # --- Hesaplama detayı için INFO butonu ---
+    col_info_btn, col_info_text = st.columns([0.08, 0.92])
+    with col_info_btn:
+        if st.button("ℹ️", key="profit_info_btn"):
+            st.session_state["show_profit_info"] = not st.session_state.get(
+                "show_profit_info", False
+            )
+
+    if st.session_state.get("show_profit_info", False):
+        st.info(
+            """
+**Hesaplama Mantığı (Ton Başına):**
+
+- **Enerji tüketimi (kwh_per_t):**  
+  Fark = Aktüel − Potansiyel (AI)  
+  Kazanç = \\|Fark\\| × Enerji birim fiyatı (€/kWh)
+
+- **Elektrot tüketimi (electrode):**  
+  Aktüel ve potansiyel kg/t olarak hesaplanır.  
+  Fark = Aktüel − Potansiyel (AI)  
+  Kazanç = \\|Fark\\| × Elektrot birim fiyatı (€/kg)
+
+- **Tap sıcaklığı (tap_temp_c):**  
+  Aktüel sıcaklık hedefin üzerindeyse, her +1 °C için  
+  *REFRACTORY_COST_EUR_PER_C* kadar ek maliyet varsayılır (refrakter + power-on time).  
+
+- **Panel ΔT (panel_delta_t):**  
+  20 °C üzerinde kalan her +1 °C için  
+  *PANEL_DELTA_T_COST_PER_C* kadar ek maliyet kabul edilir.
+
+- **Köpük seviyesi (slag_foaming):**  
+  Optimum seviye 7 alınır. Bundan her 1 index sapma için  
+  *SLAG_FOAMING_COST_PER_INDEX* kadar kalite / verim kaybı varsayılır.
+
+- **Cevher kalitesi (Raw_Cr2O3_Percent):**  
+  Örnek olarak, Cr₂O₃ yüzdesinde iyileşme ile **40k€/tap** kazanç senaryosu
+  ton başına ölçeklendirilerek gösterilir.
+
+Bu değerler demo amaçlıdır; gerçek tesis için birim fiyatlar ve katsayılar
+müşteriyle birlikte kalibre edilebilir.
+"""
+        )
 
     # -------------------------------
     # Basit Öneriler
