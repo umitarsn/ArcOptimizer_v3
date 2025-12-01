@@ -586,24 +586,49 @@ def show_arc_optimizer_page(sim_mode: bool):
         )
     )
 
-    # Aynı noktaya metin etiketi (Hedef Döküm + zaman + sıcaklık)
+    # --- HEDEF DÖKÜM ETİKETİ (her zaman görünür, otomatik zoom gerekmez) ---
     label_df = tap_point_df.copy()
-    label_df["label"] = label_df.apply(
-        lambda r: (
-            f"Hedef Döküm\n"
-            f"Zaman: {r['timestamp_dt'].strftime('%Y-%m-%d %H:%M')}\n"
-            f"Sıcaklık: {r['value']:.0f} °C"
-        ),
+
+    # Etiketi iki satır yapıyoruz: üstte zaman, altta sıcaklık
+    label_df["label_top"] = label_df.apply(
+        lambda r: f"Hedef Döküm Zamanı:\n{r['timestamp_dt'].strftime('%Y-%m-%d %H:%M')}",
+        axis=1,
+    )
+    label_df["label_bottom"] = label_df.apply(
+        lambda r: f"Sıcaklık: {r['value']:.0f} °C",
         axis=1,
     )
 
-    label_chart = (
+    # Üst satır etiketi (biraz yukarı)
+    label_top_chart = (
         alt.Chart(label_df)
-        .mark_text(align="left", dx=8, dy=-8, fontSize=11)
+        .mark_text(
+            align="left",
+            dx=10,
+            dy=-25,     # yukarı itme
+            fontSize=12,
+            fontWeight="bold"
+        )
         .encode(
             x="timestamp_dt:T",
             y="value:Q",
-            text="label:N"
+            text="label_top:N"
+        )
+    )
+
+    # Alt satır etiketi (biraz aşağı)
+    label_bottom_chart = (
+        alt.Chart(label_df)
+        .mark_text(
+            align="left",
+            dx=10,
+            dy=0,       # biraz altında
+            fontSize=11
+        )
+        .encode(
+            x="timestamp_dt:T",
+            y="value:Q",
+            text="label_bottom:N"
         )
     )
 
@@ -618,10 +643,15 @@ def show_arc_optimizer_page(sim_mode: bool):
         )
     )
 
-    st.altair_chart(
-        (base_chart + point_chart + label_chart + now_rule).interactive(),
-        use_container_width=True
-    )
+    full_chart = (
+        base_chart
+        + point_chart
+        + now_rule
+        + label_top_chart
+        + label_bottom_chart
+    ).properties(padding={"right": 80})
+
+    st.altair_chart(full_chart.interactive(), use_container_width=True)
 
     delta_min = (predicted_tap_time - last_time).total_seconds() / 60.0
     st.markdown(
