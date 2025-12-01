@@ -5,8 +5,8 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pandas as pd
-import streamlit as st
 import altair as alt
+import streamlit as st
 
 # ----------------------------------------------
 # GENEL AYARLAR
@@ -49,6 +49,7 @@ def load_runtime_data():
             pass
     return []
 
+
 def save_runtime_data(data_list):
     try:
         with open(RUNTIME_SAVE_PATH, "w", encoding="utf-8") as f:
@@ -58,6 +59,7 @@ def save_runtime_data(data_list):
             st.error(f"Runtime verileri kaydedilemedi: {e}")
         except Exception:
             print("Runtime verileri kaydedilemedi:", e)
+
 
 runtime_data = load_runtime_data()
 
@@ -404,8 +406,9 @@ def show_arc_optimizer_page(sim_mode: bool):
     if real_span.total_seconds() <= 0:
         real_span = timedelta(minutes=60)
     future_span = real_span * (0.4 / 0.6)
-    future_end = last_time + future_span
 
+    # geleceği last_time'dan itibaren ileriye ekleyeceğiz;
+    # domain'i combined üzerinden hesaplayacağız (aşağıda)
     def _safe_base(val_avg, val_last, default):
         if val_avg is not None and not pd.isna(val_avg):
             return val_avg
@@ -453,7 +456,8 @@ def show_arc_optimizer_page(sim_mode: bool):
             value_name="value",
         )
     )
-    actual_long["data_type"] = "Gerçek"
+    # Çizgi tipi: Aktüel
+    actual_long["data_type"] = "Aktüel"
 
     future_long = (
         future_df
@@ -464,15 +468,21 @@ def show_arc_optimizer_page(sim_mode: bool):
             value_name="value",
         )
     )
-    future_long["data_type"] = "Tahmin"
+    # Çizgi tipi: Potansiyel (AI)
+    future_long["data_type"] = "Potansiyel (AI)"
 
     combined = pd.concat([actual_long, future_long], ignore_index=True)
+
     variable_name_map = {
         "kwh_per_t": "kWh/t",
         "tap_temp_c": "Tap T (°C)",
         "electrode_kg_per_heat": "Elektrot (kg/şarj)",
     }
     combined["variable_name"] = combined["variable"].map(variable_name_map)
+
+    # x-ekseni domain'i: tüm veri (aktüel + tahmin) → tahmini nokta her zaman görünür
+    domain_min = combined["timestamp_dt"].min()
+    domain_max = combined["timestamp_dt"].max()
 
     st.markdown("### Proses Gidişatı – Zaman Trendi ve Tahmini Döküm Anı (AI)")
 
@@ -483,7 +493,7 @@ def show_arc_optimizer_page(sim_mode: bool):
             x=alt.X(
                 "timestamp_dt:T",
                 title="Zaman",
-                scale=alt.Scale(domain=[min_time, future_end]),
+                scale=alt.Scale(domain=[domain_min, domain_max]),
             ),
             y=alt.Y("value:Q", title=None),
             color=alt.Color("variable_name:N", title="Değişken"),
@@ -491,7 +501,7 @@ def show_arc_optimizer_page(sim_mode: bool):
                 "data_type:N",
                 title="Veri Tipi",
                 scale=alt.Scale(
-                    domain=["Gerçek", "Tahmin"],
+                    domain=["Aktüel", "Potansiyel (AI)"],
                     range=[[1, 0], [6, 4]],
                 ),
             ),
@@ -527,7 +537,7 @@ def show_arc_optimizer_page(sim_mode: bool):
 
     label_df = tap_point_df.copy()
     label_df["label_top"] = label_df.apply(
-        lambda r: f"Hedef Döküm Zamanı:\n{r['timestamp_dt'].strftime('%Y-%m-%d %H:%M')}",
+        lambda r: f"Hedef Döküm Zamanı (AI):\n{r['timestamp_dt'].strftime('%Y-%m-%d %H:%M')}",
         axis=1,
     )
     label_df["label_bottom"] = label_df.apply(
@@ -614,8 +624,8 @@ def show_arc_optimizer_page(sim_mode: bool):
             {
                 "Tag": "kwh_per_t",
                 "Değişken": "Enerji tüketimi",
-                "Gerçek": f"{real_kwh_t:.1f} kWh/t",
-                "Hedef": f"{target_kwh_t:.1f} kWh/t",
+                "Aktüel": f"{real_kwh_t:.1f} kWh/t",
+                "Potansiyel (AI)": f"{target_kwh_t:.1f} kWh/t",
                 "Fark": f"{diff_kwh_t:+.1f} kWh/t",
                 "Tahmini Kazanç (€/t)": f"{gain_kwh_per_t:.1f} €/t" if gain_kwh_per_t > 0 else "-",
             }
@@ -637,8 +647,8 @@ def show_arc_optimizer_page(sim_mode: bool):
                 {
                     "Tag": "electrode",
                     "Değişken": "Elektrot tüketimi",
-                    "Gerçek": f"{real_electrode_per_t:.3f} kg/t",
-                    "Hedef": f"{target_electrode_per_t:.3f} kg/t",
+                    "Aktüel": f"{real_electrode_per_t:.3f} kg/t",
+                    "Potansiyel (AI)": f"{target_electrode_per_t:.3f} kg/t",
                     "Fark": f"{diff_electrode_per_t:+.3f} kg/t",
                     "Tahmini Kazanç (€/t)": f"{gain_electrode_per_t:.1f} €/t" if gain_electrode_per_t > 0 else "-",
                 }
@@ -653,8 +663,8 @@ def show_arc_optimizer_page(sim_mode: bool):
             {
                 "Tag": "tap_temp_c",
                 "Değişken": "Tap sıcaklığı",
-                "Gerçek": f"{real_tap:.0f} °C",
-                "Hedef": f"{target_tap:.0f} °C",
+                "Aktüel": f"{real_tap:.0f} °C",
+                "Potansiyel (AI)": f"{target_tap:.0f} °C",
                 "Fark": f"{diff_tap:+.0f} °C",
                 "Tahmini Kazanç (€/t)": "Dolaylı",
             }
@@ -669,8 +679,8 @@ def show_arc_optimizer_page(sim_mode: bool):
             {
                 "Tag": "panel_delta_t",
                 "Değişken": "Panel ΔT",
-                "Gerçek": f"{real_panel:.1f} °C",
-                "Hedef": f"{target_panel:.1f} °C",
+                "Aktüel": f"{real_panel:.1f} °C",
+                "Potansiyel (AI)": f"{target_panel:.1f} °C",
                 "Fark": f"{diff_panel:+.1f} °C",
                 "Tahmini Kazanç (€/t)": "Dolaylı",
             }
@@ -685,8 +695,8 @@ def show_arc_optimizer_page(sim_mode: bool):
             {
                 "Tag": "slag_foaming",
                 "Değişken": "Köpük seviyesi",
-                "Gerçek": f"{real_slag:.1f}",
-                "Hedef": f"{target_slag:.1f}",
+                "Aktüel": f"{real_slag:.1f}",
+                "Potansiyel (AI)": f"{target_slag:.1f}",
                 "Fark": f"{diff_slag:+.1f}",
                 "Tahmini Kazanç (€/t)": "Dolaylı",
             }
@@ -702,8 +712,8 @@ def show_arc_optimizer_page(sim_mode: bool):
         {
             "Tag": "Raw_Cr2O3_Percent",
             "Değişken": "Cevher kalite farkı (Cr₂O₃)",
-            "Gerçek": f"{real_cr:.1f} %",
-            "Hedef": f"{target_cr:.1f} %",
+            "Aktüel": f"{real_cr:.1f} %",
+            "Potansiyel (AI)": f"{target_cr:.1f} %",
             "Fark": f"{diff_cr:+.1f} %",
             "Tahmini Kazanç (€/t)": f"≈ {gain_cr_per_t:,.0f} €/t",
         }
@@ -711,7 +721,7 @@ def show_arc_optimizer_page(sim_mode: bool):
 
     profit_df = pd.DataFrame(
         rows,
-        columns=["Tag", "Değişken", "Gerçek", "Hedef", "Fark", "Tahmini Kazanç (€/t)"],
+        columns=["Tag", "Değişken", "Aktüel", "Potansiyel (AI)", "Fark", "Tahmini Kazanç (€/t)"],
     )
     st.dataframe(profit_df, use_container_width=True, hide_index=True)
     st.markdown(
@@ -788,6 +798,7 @@ def main():
         show_runtime_page(sim_mode)
     elif page == "3. Arc Optimizer":
         show_arc_optimizer_page(sim_mode)
+
 
 if __name__ == "__main__":
     main()
