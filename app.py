@@ -2,7 +2,7 @@ import os
 import json
 import random
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo   # <-- Türkiye saati için
+from zoneinfo import ZoneInfo   # Türkiye saati için
 import pandas as pd
 import streamlit as st
 import altair as alt
@@ -586,13 +586,20 @@ def show_arc_optimizer_page(sim_mode: bool):
         )
     )
 
-    # Aynı noktaya metin etiketi (Hedef Döküm)
+    # Aynı noktaya metin etiketi (Hedef Döküm + zaman + sıcaklık)
     label_df = tap_point_df.copy()
-    label_df["label"] = "Hedef Döküm"
+    label_df["label"] = label_df.apply(
+        lambda r: (
+            f"Hedef Döküm\n"
+            f"Zaman: {r['timestamp_dt'].strftime('%Y-%m-%d %H:%M')}\n"
+            f"Sıcaklık: {r['value']:.0f} °C"
+        ),
+        axis=1,
+    )
 
     label_chart = (
         alt.Chart(label_df)
-        .mark_text(align="left", dx=8, dy=-8)
+        .mark_text(align="left", dx=8, dy=-8, fontSize=11)
         .encode(
             x="timestamp_dt:T",
             y="value:Q",
@@ -600,7 +607,7 @@ def show_arc_optimizer_page(sim_mode: bool):
         )
     )
 
-    # "Şimdi" dikey çizgisi: son ölçüm zamanı (simülasyonda TR saatine göre "şu an")
+    # "Şimdi" dikey çizgisi: son ölçüm zamanı
     now_df = pd.DataFrame({"timestamp_dt": [last_time]})
     now_rule = (
         alt.Chart(now_df)
@@ -611,8 +618,10 @@ def show_arc_optimizer_page(sim_mode: bool):
         )
     )
 
-    st.altair_chart((base_chart + point_chart + label_chart + now_rule).interactive(),
-                    use_container_width=True)
+    st.altair_chart(
+        (base_chart + point_chart + label_chart + now_rule).interactive(),
+        use_container_width=True
+    )
 
     delta_min = (predicted_tap_time - last_time).total_seconds() / 60.0
     st.markdown(
