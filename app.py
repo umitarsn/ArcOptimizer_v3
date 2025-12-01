@@ -2,6 +2,7 @@ import os
 import json
 import random
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo   # <-- Türkiye saati için
 import pandas as pd
 import streamlit as st
 import altair as alt
@@ -10,10 +11,13 @@ import altair as alt
 # GENEL AYARLAR
 # ----------------------------------------------
 st.set_page_config(
-    page_title="FeCr AI",               # Sekme / iOS varsayılan adıı
+    page_title="FeCr AI",               # Sekme / iOS varsayılan adı
     page_icon="apple-touch-icon.png",   # Proje root'taki logo dosyası
     layout="wide",
 )
+
+# Türkiye saati
+TZ = ZoneInfo("Europe/Istanbul")
 
 # Sabit inputların kaydedileceği dosya
 SETUP_SAVE_PATH = "data/saved_inputs.json"
@@ -63,10 +67,12 @@ runtime_data = load_runtime_data()
 def generate_simulation_runtime_data(n=15):
     """Simülasyon Modu için örnek şarj datası üretir."""
     sim_list = []
-    now = datetime.now()
+    # Türkiye saatiyle şu an
+    now = datetime.now(TZ)
 
+    # İlk nokta: now - (n-1) saat, son nokta: tam "şu an"
     for i in range(n):
-        ts = now - timedelta(hours=(n - i))
+        ts = now - timedelta(hours=(n - 1 - i))
         heat_id = f"SIM-{i+1}"
 
         tap_weight = 35 + random.uniform(-3, 3)          # ton
@@ -303,7 +309,8 @@ def show_runtime_page(sim_mode: bool):
             if sim_mode:
                 st.warning("Simülasyon Modu aktifken yeni veri kalıcı olarak kaydedilmez. Bu giriş sadece test içindir.")
             else:
-                now = datetime.now().isoformat()
+                # Türkiye saatiyle timestamp
+                now = datetime.now(TZ).isoformat()
                 kwh_per_t = energy_kwh / tap_weight if tap_weight > 0 else None
 
                 new_entry = {
@@ -457,7 +464,7 @@ def show_arc_optimizer_page(sim_mode: bool):
         real_span = timedelta(minutes=60)
 
     # Gerçek 60%, tahmin 40% olacak şekilde:
-    future_span = real_span * (0.4 / 0.6)  # yaklaşık 2/3'ü kadar ileri
+    future_span = real_span * (0.4 / 0.6)
     future_end = last_time + future_span
 
     # Güvenli base fonksiyonu
@@ -476,13 +483,13 @@ def show_arc_optimizer_page(sim_mode: bool):
     predicted_kwh_t_target = base_kwh_t - 5.0
     predicted_electrode_target = base_electrode
 
-    # Gelecekte 3 nokta oluşturalım (son nokta = tahmini döküm anı, grafiğin sonu)
+    # Gelecekte 4 nokta oluşturalım (0 = şimdi, 3 = tahmini döküm anı)
     future_points = []
     last_kwh = last.get("kwh_per_t", base_kwh_t)
     last_tap_temp = last.get("tap_temp_c", base_tap_temp)
     last_electrode = last.get("electrode_kg_per_heat", base_electrode)
 
-    for i in range(1, 4):
+    for i in range(4):  # 0,1,2,3
         frac = i / 3.0
         t = last_time + future_span * frac
         kwh_val = last_kwh + (predicted_kwh_t_target - last_kwh) * frac
@@ -567,7 +574,7 @@ def show_arc_optimizer_page(sim_mode: bool):
 
     point_chart = (
         alt.Chart(tap_point_df)
-        .mark_point(size=90, filled=True)
+        .mark_point(size=120, filled=True)
         .encode(
             x="timestamp_dt:T",
             y="value:Q",
@@ -579,18 +586,33 @@ def show_arc_optimizer_page(sim_mode: bool):
         )
     )
 
-    # "Şimdi" dikey çizgisi: son ölçüm zamanı (last_time)
+    # Aynı noktaya metin etiketi (Hedef Döküm)
+    label_df = tap_point_df.copy()
+    label_df["label"] = "Hedef Döküm"
+
+    label_chart = (
+        alt.Chart(label_df)
+        .mark_text(align="left", dx=8, dy=-8)
+        .encode(
+            x="timestamp_dt:T",
+            y="value:Q",
+            text="label:N"
+        )
+    )
+
+    # "Şimdi" dikey çizgisi: son ölçüm zamanı (simülasyonda TR saatine göre "şu an")
     now_df = pd.DataFrame({"timestamp_dt": [last_time]})
     now_rule = (
         alt.Chart(now_df)
         .mark_rule(strokeDash=[2, 2])
         .encode(
             x="timestamp_dt:T",
-            tooltip=[alt.Tooltip("timestamp_dt:T", title="Son Ölçüm / Şimdi")],
+            tooltip=[alt.Tooltip("timestamp_dt:T", title="Şimdiki An / Son Ölçüm")],
         )
     )
 
-    st.altair_chart((base_chart + point_chart + now_rule).interactive(), use_container_width=True)
+    st.altair_chart((base_chart + point_chart + label_chart + now_rule).interactive(),
+                    use_container_width=True)
 
     delta_min = (predicted_tap_time - last_time).total_seconds() / 60.0
     st.markdown(
