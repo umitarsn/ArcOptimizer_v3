@@ -54,7 +54,10 @@ def save_runtime_data(data_list):
         with open(RUNTIME_SAVE_PATH, "w", encoding="utf-8") as f:
             json.dump(data_list, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        st.error(f"Runtime verileri kaydedilemedi: {e}")
+        try:
+            st.error(f"Runtime verileri kaydedilemedi: {e}")
+        except Exception:
+            print("Runtime verileri kaydedilemedi:", e)
 
 runtime_data = load_runtime_data()
 
@@ -607,6 +610,184 @@ def show_arc_optimizer_page(sim_mode: bool):
         diff_kwh_t = real_kwh_t - target_kwh_t
         gain_kwh_per_t = max(0.0, diff_kwh_t) * ENERGY_PRICE_EUR_PER_KWH
         total_gain_per_t += gain_kwh_per_t
-        rows.append({
-            "Tag": "kwh_per_t",
-            "Değişken": "Enerji tüket
+        rows.append(
+            {
+                "Tag": "kwh_per_t",
+                "Değişken": "Enerji tüketimi",
+                "Gerçek": f"{real_kwh_t:.1f} kWh/t",
+                "Hedef": f"{target_kwh_t:.1f} kWh/t",
+                "Fark": f"{diff_kwh_t:+.1f} kWh/t",
+                "Tahmini Kazanç (€/t)": f"{gain_kwh_per_t:.1f} €/t" if gain_kwh_per_t > 0 else "-",
+            }
+        )
+
+    # Elektrot tüketimi
+    if pd.notna(last.get("electrode_kg_per_heat", None)) and pd.notna(last.get("tap_weight_t", None)):
+        tap_weight = float(last["tap_weight_t"]) if last["tap_weight_t"] else None
+        if tap_weight and tap_weight > 0:
+            real_electrode_per_t = float(last["electrode_kg_per_heat"]) / tap_weight
+            if pd.notna(avg_electrode):
+                target_electrode_per_t = max(avg_electrode / tap_weight, 0.0)
+            else:
+                target_electrode_per_t = max(real_electrode_per_t - 0.05, 0.0)
+            diff_electrode_per_t = real_electrode_per_t - target_electrode_per_t
+            gain_electrode_per_t = max(0.0, diff_electrode_per_t) * ELECTRODE_PRICE_EUR_PER_KG
+            total_gain_per_t += gain_electrode_per_t
+            rows.append(
+                {
+                    "Tag": "electrode",
+                    "Değişken": "Elektrot tüketimi",
+                    "Gerçek": f"{real_electrode_per_t:.3f} kg/t",
+                    "Hedef": f"{target_electrode_per_t:.3f} kg/t",
+                    "Fark": f"{diff_electrode_per_t:+.3f} kg/t",
+                    "Tahmini Kazanç (€/t)": f"{gain_electrode_per_t:.1f} €/t" if gain_electrode_per_t > 0 else "-",
+                }
+            )
+
+    # Tap sıcaklığı (dolaylı)
+    if pd.notna(last.get("tap_temp_c", None)) and avg_tap_temp and not pd.isna(avg_tap_temp):
+        real_tap = float(last["tap_temp_c"])
+        target_tap = float(avg_tap_temp)
+        diff_tap = real_tap - target_tap
+        rows.append(
+            {
+                "Tag": "tap_temp_c",
+                "Değişken": "Tap sıcaklığı",
+                "Gerçek": f"{real_tap:.0f} °C",
+                "Hedef": f"{target_tap:.0f} °C",
+                "Fark": f"{diff_tap:+.0f} °C",
+                "Tahmini Kazanç (€/t)": "Dolaylı",
+            }
+        )
+
+    # Panel ΔT (dolaylı)
+    if pd.notna(last.get("panel_delta_t_c", None)):
+        real_panel = float(last["panel_delta_t_c"])
+        target_panel = 20.0
+        diff_panel = real_panel - target_panel
+        rows.append(
+            {
+                "Tag": "panel_delta_t",
+                "Değişken": "Panel ΔT",
+                "Gerçek": f"{real_panel:.1f} °C",
+                "Hedef": f"{target_panel:.1f} °C",
+                "Fark": f"{diff_panel:+.1f} °C",
+                "Tahmini Kazanç (€/t)": "Dolaylı",
+            }
+        )
+
+    # Slag foaming (dolaylı)
+    if last.get("slag_foaming_index", None) is not None:
+        real_slag = float(last["slag_foaming_index"])
+        target_slag = 7.0
+        diff_slag = real_slag - target_slag
+        rows.append(
+            {
+                "Tag": "slag_foaming",
+                "Değişken": "Köpük seviyesi",
+                "Gerçek": f"{real_slag:.1f}",
+                "Hedef": f"{target_slag:.1f}",
+                "Fark": f"{diff_slag:+.1f}",
+                "Tahmini Kazanç (€/t)": "Dolaylı",
+            }
+        )
+
+    # Cevher Cr2O3 – 40k€/heat örneği
+    real_cr = 10.0
+    target_cr = 20.0
+    diff_cr = target_cr - real_cr
+    gain_cr_per_t = 40000.0 / TYPICAL_HEAT_TON
+    total_gain_per_t += gain_cr_per_t
+    rows.append(
+        {
+            "Tag": "Raw_Cr2O3_Percent",
+            "Değişken": "Cevher kalite farkı (Cr₂O₃)",
+            "Gerçek": f"{real_cr:.1f} %",
+            "Hedef": f"{target_cr:.1f} %",
+            "Fark": f"{diff_cr:+.1f} %",
+            "Tahmini Kazanç (€/t)": f"≈ {gain_cr_per_t:,.0f} €/t",
+        }
+    )
+
+    profit_df = pd.DataFrame(
+        rows,
+        columns=["Tag", "Değişken", "Gerçek", "Hedef", "Fark", "Tahmini Kazanç (€/t)"],
+    )
+    st.dataframe(profit_df, use_container_width=True, hide_index=True)
+    st.markdown(
+        f"**Toplam Potansiyel Kazanç (AI tahmini, ton başına):** ≈ **{total_gain_per_t:,.1f} €/t**"
+    )
+
+    # -------------------------------
+    # Model Önerileri
+    # -------------------------------
+    st.markdown("### Model Önerileri (Örnek / Demo Mantık)")
+    suggestions = []
+    if pd.notna(last.get("kwh_per_t", None)) and avg_kwh_t and not pd.isna(avg_kwh_t) \
+            and last["kwh_per_t"] > avg_kwh_t * 1.05:
+        suggestions.append(
+            "🔌 Son şarjın **kWh/t değeri**, son 10 şarj ortalamasına göre yüksek görünüyor. "
+            "Oksijen debisini optimize etmeyi ve güç profilini gözden geçirmeyi düşünün."
+        )
+    if pd.notna(last.get("electrode_kg_per_heat", None)) and avg_electrode and not pd.isna(avg_electrode) \
+            and last["electrode_kg_per_heat"] > avg_electrode * 1.10:
+        suggestions.append(
+            "🧯 **Elektrot tüketimi** son şarjda yükselmiş. Ark stabilitesini (ark boyu, voltaj) kontrol edin."
+        )
+    if pd.notna(last.get("tap_temp_c", None)) and avg_tap_temp and not pd.isna(avg_tap_temp) \
+            and last["tap_temp_c"] < avg_tap_temp - 10:
+        suggestions.append(
+            "🔥 Tap sıcaklığı son şarjda düşük. Bir sonraki şarj için enerji girişini hafif artırmak veya "
+            "şarj sonu bekleme süresini optimize etmek gerekebilir."
+        )
+    if last.get("slag_foaming_index", None) is not None and last["slag_foaming_index"] >= 8:
+        suggestions.append(
+            "🌋 Slag foaming seviyesi yüksek (≥8). Karbon/O2 dengesini ve köpük kontrolünü gözden geçirin."
+        )
+    if last.get("panel_delta_t_c", None) is not None and last["panel_delta_t_c"] > 25:
+        suggestions.append(
+            "💧 Panel ΔT yüksek. Soğutma devresinde dengesizlik olabilir; panel debilerini kontrol edin."
+        )
+    if saving_potential > 0.0:
+        suggestions.append(
+            f"📉 Son trendlere göre, kWh/t değerinde yaklaşık **{saving_potential:.1f} kWh/t** "
+            "iyileştirme potansiyeli görülüyor."
+        )
+    if not suggestions:
+        suggestions.append(
+            "✅ Model açısından belirgin bir anomali veya iyileştirme alarmı görülmüyor. Mevcut ayarlar stabil."
+        )
+    for s in suggestions:
+        st.markdown(f"- {s}")
+
+# ----------------------------------------------
+# UYGULAMA BAŞLAT
+# ----------------------------------------------
+def main():
+    with st.sidebar:
+        try:
+            st.image("apple-touch-icon.png", width=72)
+        except Exception:
+            pass
+        st.markdown("### FeCr AI")
+
+        sim_mode = st.toggle(
+            "Simülasyon Modu",
+            value=False,
+            help="Açıkken sistem canlı veri yerine simüle edilmiş veri kullanır.",
+        )
+
+        page = st.radio(
+            "Sayfa Seç",
+            ["1. Setup", "2. Canlı Veri", "3. Arc Optimizer"],
+        )
+
+    if page == "1. Setup":
+        show_setup_form()
+    elif page == "2. Canlı Veri":
+        show_runtime_page(sim_mode)
+    elif page == "3. Arc Optimizer":
+        show_arc_optimizer_page(sim_mode)
+
+if __name__ == "__main__":
+    main()
