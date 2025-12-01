@@ -405,10 +405,10 @@ def show_arc_optimizer_page(sim_mode: bool):
     real_span = last_time - min_time
     if real_span.total_seconds() <= 0:
         real_span = timedelta(minutes=60)
-    future_span = real_span * (0.4 / 0.6)
 
-    # geleceği last_time'dan itibaren ileriye ekleyeceğiz;
-    # domain'i combined üzerinden hesaplayacağız (aşağıda)
+    # TAHMİN ARALIĞI → gerçek span'in %20'si kadar ileri: çok sağa yaslanmasın
+    future_span = real_span * 0.20
+
     def _safe_base(val_avg, val_last, default):
         if val_avg is not None and not pd.isna(val_avg):
             return val_avg
