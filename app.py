@@ -24,14 +24,23 @@ RUNTIME_SAVE_PATH = "data/runtime_data.json"
 os.makedirs("data", exist_ok=True)
 
 # ----------------------------------------------
-# GLOBAL STATE
+# GLOBAL SESSION STATE
 # ----------------------------------------------
+# Setup sayfası info durumları
 if "info_state" not in st.session_state:
     st.session_state.info_state = {}
 
-# kâr tablosu info durumları (burada tutacağız)
+# Kâr tablosu info durumları
 if "profit_info_state" not in st.session_state:
     st.session_state.profit_info_state = {}
+
+# Simülasyon verisi (sabit kalacak)
+if "sim_data" not in st.session_state:
+    st.session_state.sim_data = None
+
+# Simülasyon modunun önceki durumu
+if "sim_mode_flag" not in st.session_state:
+    st.session_state.sim_mode_flag = None
 
 # ----------------------------------------------
 # KAYITLI SETUP VERİLERİ
@@ -314,7 +323,12 @@ def show_runtime_page(sim_mode: bool):
                 save_runtime_data(runtime_data)
                 st.success(f"Şarj kaydı eklendi: {heat_id}")
 
-    data_source = generate_simulation_runtime_data() if sim_mode else runtime_data
+    # Veri kaynağı: simülasyonda sabit sim_data, gerçek modda runtime_data
+    if sim_mode:
+        data_source = st.session_state.sim_data
+    else:
+        data_source = runtime_data
+
     if not data_source:
         st.info("Henüz canlı veri girilmedi.")
         return
@@ -368,7 +382,12 @@ def show_arc_optimizer_page(sim_mode: bool):
             "🧪 **Simülasyon Modu Aktif.** Arc Optimizer çıktıları simüle edilen veri üzerinden hesaplanır."
         )
 
-    data_source = generate_simulation_runtime_data() if sim_mode else runtime_data
+    # Veri kaynağı
+    if sim_mode:
+        data_source = st.session_state.sim_data
+    else:
+        data_source = runtime_data
+
     if not data_source:
         st.info("Önce 2. sayfadan canlı veri ekleyin.")
         return
@@ -697,7 +716,7 @@ def show_arc_optimizer_page(sim_mode: bool):
     hcols[5].markdown("**Tahmini Kazanç (€/t)**")
     hcols[6].markdown("")
 
-    profit_state = st.session_state.profit_info_state  # kısayol
+    profit_state = st.session_state.profit_info_state
 
     for row in rows:
         cols = st.columns(widths)
@@ -708,7 +727,6 @@ def show_arc_optimizer_page(sim_mode: bool):
         cols[4].markdown(row["fark"])
         cols[5].markdown(row["kazanc"])
 
-        # BUTON KEY ve STATE KEY AYRI!
         btn_key = f"profit_info_btn_{row['tag']}"
         if cols[6].button("ℹ️", key=btn_key):
             profit_state[row["tag"]] = not profit_state.get(row["tag"], False)
@@ -836,6 +854,18 @@ def main():
             value=False,
             help="Açıkken sistem canlı veri yerine simüle edilmiş veri kullanır.",
         )
+
+        # Simülasyon verisini sadece bir kez üret ve sabit tut
+        if sim_mode:
+            if (
+                st.session_state.sim_mode_flag is not True
+                or st.session_state.sim_data is None
+            ):
+                st.session_state.sim_data = generate_simulation_runtime_data()
+                st.session_state.sim_mode_flag = True
+        else:
+            st.session_state.sim_mode_flag = False
+            st.session_state.sim_data = None
 
         page = st.radio("Sayfa Seç", ["1. Setup", "2. Canlı Veri", "3. Arc Optimizer"])
 
