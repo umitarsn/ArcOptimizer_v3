@@ -652,26 +652,28 @@ def show_arc_optimizer_page(sim_mode: bool):
                 }
             )
 
-    # Tap sıcaklığı – kalite
+    # Tap sıcaklığı – enerji + kalite (sabit aralık)
     if pd.notna(last.get("tap_temp_c", None)) and avg_tap_temp and not pd.isna(
         avg_tap_temp
     ):
         real = float(last["tap_temp_c"])
         target = float(avg_tap_temp)
         diff = real - target
+        # Literatüre göre 3 °C düşüş için ~0.5–1.0 kWh/t ≈ 0.03–0.10 €/t
+        tap_gain_range = "0.03–0.10 €/t + Kalite ↑"
         rows.append(
             {
                 "tag": "tap_temp_c",
-                "deg": "Tap sıcaklığı",
+                "deg": "Tap sıcaklığı optimizasyonu",
                 "akt": f"{real:.0f} °C",
                 "pot": f"{target:.0f} °C",
                 "fark": f"{diff:+.0f} °C",
-                "kazanc": "Kalite ↑",
-                "type": "quality",
+                "kazanc": tap_gain_range,
+                "type": "mixed",
             }
         )
 
-    # Panel ΔT – kalite
+    # Panel ΔT – kalite göstergesi
     if pd.notna(last.get("panel_delta_t_c", None)):
         real = float(last["panel_delta_t_c"])
         target = 20.0
@@ -688,7 +690,7 @@ def show_arc_optimizer_page(sim_mode: bool):
             }
         )
 
-    # Slag foaming – kalite
+    # Slag foaming – kalite + verim göstergesi
     if last.get("slag_foaming_index", None) is not None:
         real = float(last["slag_foaming_index"])
         target = 7.0
@@ -696,24 +698,24 @@ def show_arc_optimizer_page(sim_mode: bool):
         rows.append(
             {
                 "tag": "slag_foaming",
-                "deg": "Köpük seviyesi",
+                "deg": "Köpük seviyesi (slag foaming)",
                 "akt": f"{real:.1f}",
                 "pot": f"{target:.1f}",
                 "fark": f"{diff:+.1f}",
-                "kazanc": "Kalite ↑",
+                "kazanc": "Kalite ↑ + Verim ↑",
                 "type": "quality",
             }
         )
 
     # ---- Tabloyu manuel çizelim (info buton için) ----
-    widths = [1.0, 2.0, 1.3, 1.3, 1.1, 1.2, 0.5]
+    widths = [1.0, 2.0, 1.3, 1.3, 1.1, 1.8, 0.5]
     hcols = st.columns(widths)
     hcols[0].markdown("**Tag**")
     hcols[1].markdown("**Değişken**")
     hcols[2].markdown("**Aktüel**")
     hcols[3].markdown("**Potansiyel (AI)**")
     hcols[4].markdown("**Fark**")
-    hcols[5].markdown("**Tahmini Kazanç (€/t)**")
+    hcols[5].markdown("**Tahmini Kazanç**")
     hcols[6].markdown("")
 
     profit_state = st.session_state.profit_info_state
@@ -732,7 +734,8 @@ def show_arc_optimizer_page(sim_mode: bool):
             profit_state[row["tag"]] = not profit_state.get(row["tag"], False)
 
     st.markdown(
-        f"**Toplam Potansiyel Kazanç (AI tahmini, ton başına):** ≈ **{total_gain_per_t:,.1f} €/t**"
+        f"**Toplam Potansiyel Kazanç (AI tahmini, ton başına – doğrudan hesaplanabilen kalemler):** "
+        f"≈ **{total_gain_per_t:,.1f} €/t**"
     )
 
     # Satır bazlı açıklamalar
@@ -741,39 +744,51 @@ def show_arc_optimizer_page(sim_mode: bool):
             if row["tag"] == "kwh_per_t":
                 st.info(
                     "**Enerji tüketimi (kwh_per_t)**\n\n"
-                    "- Aktüel ve Potansiyel (AI) değerleri kWh/t cinsindedir.\n"
-                    "- Fark = Aktüel − Potansiyel.\n"
-                    "- Tahmini kazanç = |Fark| × Enerji birim fiyatı (€/kWh)."
+                    "- Aktüel ve Potansiyel (AI) kWh/t değerleri arasındaki fark alınır.\n"
+                    "- Tahmini kazanç = |Fark| × enerji birim fiyatı (€/kWh).\n"
+                    "- Literatürde, tap sıcaklığında birkaç derecelik düşüşün "
+                    "0,5–1,0 kWh/t seviyesinde tasarruf yaratabildiği gösterilmiştir."
                 )
             elif row["tag"] == "electrode":
                 st.info(
                     "**Elektrot tüketimi (electrode)**\n\n"
                     "- Aktüel ve Potansiyel (AI) değerleri kg/t cinsindedir.\n"
-                    "- Fark = Aktüel − Potansiyel.\n"
-                    "- Tahmini kazanç = |Fark| × Elektrot birim fiyatı (€/kg)."
+                    "- Tahmini kazanç = |Fark| × elektrot birim fiyatı (€/kg).\n"
+                    "- İyi köpük seviyesi ve stabil ark koşulları, elektrot tüketimini "
+                    "azaltarak bu kazancı destekler."
                 )
             elif row["tag"] == "tap_temp_c":
                 st.info(
-                    "**Tap sıcaklığı (tap_temp_c)**\n\n"
-                    "- Hedefe göre daha düşük aşırı sıcaklık, daha az refrakter yükü ve "
-                    "daha stabil proses anlamına gelir.\n"
-                    "- Burada parasal kazanç yerine **kalite / ömür iyileşmesi** 'Kalite ↑' "
-                    "olarak gösterilir."
+                    "**Tap sıcaklığı optimizasyonu (tap_temp_c)**\n\n"
+                    "- Tap sıcaklığının birkaç °C düşürülmesi, süper-ısıtma yükünü azaltır.\n"
+                    "- Literatüre göre 3 °C düşüş ~0,5–1,0 kWh/t tasarruf ve yaklaşık "
+                    "0,03–0,10 €/t maliyet kazanımı sağlayabilir.\n"
+                    "- Ayrıca aşırı süper-ısıtmanın azalması; oksidasyon, gaz absorpsiyonu "
+                    "ve inklüzyon oluşumunu sınırlandırarak kaliteyi iyileştirebilir.\n"
+                    "- Bu nedenle tabloda hem parasal aralık hem de **Kalite ↑** birlikte gösterilir."
                 )
             elif row["tag"] == "panel_delta_t":
                 st.info(
                     "**Panel ΔT (panel_delta_t)**\n\n"
-                    "- Daha düşük ΔT, panellerde daha homojen soğutma ve daha uzun ömür anlamına gelir.\n"
-                    "- Bu etki dolaylı olduğu için tabloya parasal karşılık yazılmamış, "
-                    "**kalite göstergesi** olarak işaretlenmiştir."
+                    "- Panel ΔT, su soğutmalı panellerin giriş-çıkış suyu sıcaklık farkını gösterir.\n"
+                    "- Uygun seviyede ΔT, duvarlarda cüruf filmi oluşumunu ve daha homojen "
+                    "sıcaklık profilini destekler.\n"
+                    "- Bu da iç hurda, yeniden işleme (rework) ve ısı kayıplarının azalmasına "
+                    "dolaylı katkı verir.\n"
+                    "- Etki dolaylı olduğu için tabloda parasal bir rakam yerine **Kalite ↑** "
+                    "olarak gösterilir."
                 )
             elif row["tag"] == "slag_foaming":
                 st.info(
-                    "**Köpük seviyesi (slag_foaming)**\n\n"
-                    "- Hedef seviye 7 civarı kabul edilmiştir.\n"
-                    "- Bundan sapma; enerji verimliliği, elektrot ömrü ve çelik kalitesini "
-                    "dolaylı etkiler.\n"
-                    "- Bu nedenle parasal değer yerine **Kalite ↑** ile gösterilir."
+                    "**Köpük seviyesi (slag foaming)**\n\n"
+                    "- İyi kontrol edilen köpüklü cüruf, arkı örterek enerji verimliliğini "
+                    "artırır, refrakter aşınmasını azaltır ve ark stabilitesini iyileştirir.\n"
+                    "- Çeşitli saha verilerinde, uygun köpük seviyesiyle enerji tüketiminde "
+                    "%3–10, refrakter aşınmasında %25–60 civarında iyileşme bildirilmektedir.\n"
+                    "- Bu etkiler ton başına birkaç €/t mertebesinde dolaylı maliyet avantajı "
+                    "ve daha yüksek üretim hızı sağlayabilir.\n"
+                    "- Doğrudan hesaplanabilir bir € formülüne indirgenmesi zor olduğu için, "
+                    "tabloda **Kalite ↑ + Verim ↑** ifadesi kullanılır."
                 )
 
     # Basit öneriler
