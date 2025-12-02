@@ -441,7 +441,8 @@ def show_arc_optimizer_page(sim_mode: bool):
     if real_span.total_seconds() <= 0:
         real_span = timedelta(hours=6)
 
-    future_span = real_span * 0.20  # eksenin %20'si tahmin
+    # Eksende geleceğe ayrılacak pay (%20)
+    future_span = real_span * 0.20
 
     def _safe_base(val_avg, val_last, default):
         if val_avg is not None and not pd.isna(val_avg):
@@ -463,7 +464,7 @@ def show_arc_optimizer_page(sim_mode: bool):
     last_tap_temp = last.get("tap_temp_c", base_tap_temp)
     last_electrode = last.get("electrode_kg_per_heat", base_electrode)
 
-    for i in range(4):  # 0,1/3,2/3,1
+    for i in range(4):  # 0, 1/3, 2/3, 1
         frac = i / 3.0
         t = last_time + future_span * frac
         kwh_val = last_kwh + (predicted_kwh_t_target - last_kwh) * frac
@@ -520,17 +521,32 @@ def show_arc_optimizer_page(sim_mode: bool):
 
     st.markdown("### Proses Gidişatı – Zaman Trendi ve Tahmini Döküm Anı (AI)")
 
+    # --- MOBİL DOSTU GRAFİK ---
     base_chart = (
         alt.Chart(combined)
-        .mark_line()
+        .mark_line(point=True)
         .encode(
             x=alt.X(
                 "timestamp_dt:T",
                 title="Zaman",
                 scale=alt.Scale(domain=[domain_min, domain_max]),
+                axis=alt.Axis(labelFontSize=12, titleFontSize=14),
             ),
-            y=alt.Y("value:Q", title=None),
-            color=alt.Color("variable_name:N", title="Değişken"),
+            y=alt.Y(
+                "value:Q",
+                title=None,
+                axis=alt.Axis(labelFontSize=12, titleFontSize=14),
+            ),
+            color=alt.Color(
+                "variable_name:N",
+                title="Değişken",
+                legend=alt.Legend(
+                    orient="top",            # legend grafiğin üstünde
+                    direction="horizontal",
+                    labelFontSize=11,
+                    titleFontSize=12,
+                ),
+            ),
             strokeDash=alt.StrokeDash(
                 "data_type:N",
                 title="Veri Tipi",
@@ -540,7 +556,10 @@ def show_arc_optimizer_page(sim_mode: bool):
                 ),
             ),
         )
-        .properties(height=320)
+        .properties(
+            height=420,        # mobilde daha yüksek
+            width="container", # bulunduğu alanı doldur
+        )
     )
 
     tap_point_df = future_df[future_df["timestamp_dt"] == predicted_tap_time][
@@ -585,7 +604,9 @@ def show_arc_optimizer_page(sim_mode: bool):
 
     full_chart = (
         base_chart + point_chart + now_rule + label_top_chart + label_bottom_chart
-    ).properties(padding={"right": 160})
+    ).properties(
+        padding={"right": 20, "left": 10, "top": 40, "bottom": 20},
+    )
 
     st.altair_chart(full_chart.interactive(), use_container_width=True)
 
@@ -659,7 +680,6 @@ def show_arc_optimizer_page(sim_mode: bool):
         real = float(last["tap_temp_c"])
         target = float(avg_tap_temp)
         diff = real - target
-        # Literatüre göre 3 °C düşüş için ~0.5–1.0 kWh/t ≈ 0.03–0.10 €/t
         tap_gain_range = "0.03–0.10 €/t + Kalite ↑"
         rows.append(
             {
