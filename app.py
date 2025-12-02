@@ -520,27 +520,17 @@ def show_arc_optimizer_page(sim_mode: bool):
 
     st.markdown("### Proses Gidişatı – Zaman Trendi ve Tahmini Döküm Anı (AI)")
 
-    # ---- MOBİL DOSTU GRAFİK ----
     base_chart = (
         alt.Chart(combined)
-        .mark_line(point=True)
+        .mark_line()
         .encode(
             x=alt.X(
                 "timestamp_dt:T",
                 title="Zaman",
                 scale=alt.Scale(domain=[domain_min, domain_max]),
-                axis=alt.Axis(labelFontSize=12, titleFontSize=14),
             ),
-            y=alt.Y(
-                "value:Q",
-                title=None,
-                axis=alt.Axis(labelFontSize=12, titleFontSize=14),
-            ),
-            color=alt.Color(
-                "variable_name:N",
-                title="Değişken",
-                legend=alt.Legend(labelFontSize=12, titleFontSize=13),
-            ),
+            y=alt.Y("value:Q", title=None),
+            color=alt.Color("variable_name:N", title="Değişken"),
             strokeDash=alt.StrokeDash(
                 "data_type:N",
                 title="Veri Tipi",
@@ -550,10 +540,7 @@ def show_arc_optimizer_page(sim_mode: bool):
                 ),
             ),
         )
-        .properties(
-            height=420,        # mobilde daha yüksek
-            width="container", # bulunduğu alanı doldur
-        )
+        .properties(height=320)
     )
 
     tap_point_df = future_df[future_df["timestamp_dt"] == predicted_tap_time][
@@ -672,6 +659,7 @@ def show_arc_optimizer_page(sim_mode: bool):
         real = float(last["tap_temp_c"])
         target = float(avg_tap_temp)
         diff = real - target
+        # Literatüre göre 3 °C düşüş için ~0.5–1.0 kWh/t ≈ 0.03–0.10 €/t
         tap_gain_range = "0.03–0.10 €/t + Kalite ↑"
         rows.append(
             {
