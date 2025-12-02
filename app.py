@@ -541,7 +541,7 @@ def show_arc_optimizer_page(sim_mode: bool):
                 "variable_name:N",
                 title="Değişken",
                 legend=alt.Legend(
-                    orient="top",            # legend grafiğin üstünde
+                    orient="top",
                     direction="horizontal",
                     labelFontSize=11,
                     titleFontSize=12,
@@ -557,8 +557,8 @@ def show_arc_optimizer_page(sim_mode: bool):
             ),
         )
         .properties(
-            height=420,        # mobilde daha yüksek
-            width="container", # bulunduğu alanı doldur
+            height=420,
+            width="container",
         )
     )
 
@@ -710,19 +710,91 @@ def show_arc_optimizer_page(sim_mode: bool):
             }
         )
 
-    # Slag foaming – kalite + verim göstergesi
+    # Slag foaming – köpük yüksekliği + verim / kalite
+    slag_val = None
     if last.get("slag_foaming_index", None) is not None:
-        real = float(last["slag_foaming_index"])
+        slag_val = float(last["slag_foaming_index"])
         target = 7.0
-        diff = real - target
+        diff = slag_val - target
         rows.append(
             {
                 "tag": "slag_foaming",
-                "deg": "Köpük seviyesi (slag foaming)",
-                "akt": f"{real:.1f}",
+                "deg": "Köpük yüksekliği / slag foaming",
+                "akt": f"{slag_val:.1f}",
                 "pot": f"{target:.1f}",
                 "fark": f"{diff:+.1f}",
-                "kazanc": "Kalite ↑ + Verim ↑",
+                "kazanc": "Enerji verimliliği ↑, elektrot ve refrakter tüketimi ↓",
+                "type": "quality",
+            }
+        )
+
+    # Refrakter aşınma seviyesi – nitel gösterge
+    if pd.notna(last.get("tap_temp_c", None)) and pd.notna(last.get("panel_delta_t_c", None)):
+        t_act = float(last["tap_temp_c"])
+        dT_act = float(last["panel_delta_t_c"])
+
+        if (avg_tap_temp is not None and not pd.isna(avg_tap_temp)):
+            dt_from_avg = t_act - float(avg_tap_temp)
+        else:
+            dt_from_avg = 0.0
+
+        if dt_from_avg > 20 or dT_act > 30:
+            refr_level = "Yüksek risk"
+        elif dt_from_avg > 10 or dT_act > 25:
+            refr_level = "Orta"
+        else:
+            refr_level = "Düşük"
+
+        rows.append(
+            {
+                "tag": "refractory_wear",
+                "deg": "Refrakter aşınma seviyesi",
+                "akt": refr_level,
+                "pot": "AI kontrollü optimum bölge",
+                "fark": "-",
+                "kazanc": "Refrakter ömrü ↑, planlı duruşlar dışında duruş ↓",
+                "type": "quality",
+            }
+        )
+
+    # Karışım kalitesi (homojenlik) – nitel gösterge
+    if (
+        pd.notna(last.get("kwh_per_t", None))
+        and avg_kwh_t
+        and not pd.isna(avg_kwh_t)
+        and pd.notna(last.get("tap_temp_c", None))
+        and avg_tap_temp
+        and not pd.isna(avg_tap_temp)
+    ):
+        score = 0
+
+        # Köpük kalitesi
+        if slag_val is not None and slag_val >= 7.0:
+            score += 1
+
+        # Enerji stabilitesi
+        if abs(float(last["kwh_per_t"]) - float(avg_kwh_t)) <= 10:
+            score += 1
+
+        # Tap sıcaklığı stabilitesi
+        if abs(float(last["tap_temp_c"]) - float(avg_tap_temp)) <= 10:
+            score += 1
+
+        if score == 3:
+            mix_level = "İyi"
+        elif score == 2:
+            mix_level = "Orta"
+        else:
+            mix_level = "Riskli"
+
+        rows.append(
+            {
+                "tag": "mix_quality",
+                "deg": "Karışım kalitesi (homojenlik)",
+                "akt": mix_level,
+                "pot": "AI ile stabil ve homojen bölge",
+                "fark": "-",
+                "kazanc": "Kalite ↑, iç hurda ve yeniden işleme ↓",
                 "type": "quality",
             }
         )
@@ -800,15 +872,28 @@ def show_arc_optimizer_page(sim_mode: bool):
                 )
             elif row["tag"] == "slag_foaming":
                 st.info(
-                    "**Köpük seviyesi (slag foaming)**\n\n"
-                    "- İyi kontrol edilen köpüklü cüruf, arkı örterek enerji verimliliğini "
-                    "artırır, refrakter aşınmasını azaltır ve ark stabilitesini iyileştirir.\n"
-                    "- Çeşitli saha verilerinde, uygun köpük seviyesiyle enerji tüketiminde "
-                    "%3–10, refrakter aşınmasında %25–60 civarında iyileşme bildirilmektedir.\n"
-                    "- Bu etkiler ton başına birkaç €/t mertebesinde dolaylı maliyet avantajı "
-                    "ve daha yüksek üretim hızı sağlayabilir.\n"
-                    "- Doğrudan hesaplanabilir bir € formülüne indirgenmesi zor olduğu için, "
-                    "tabloda **Kalite ↑ + Verim ↑** ifadesi kullanılır."
+                    "**Köpük yüksekliği / slag foaming**\n\n"
+                    "- Köpük yüksekliği yeterli olduğunda ark örtülür, enerji verimliliği artar, "
+                    "elektrot ve refrakter tüketimi azalır.\n"
+                    "- Yetersiz köpük: enerji kaybı, panel ve refrakter yükü artışı.\n"
+                    "- Aşırı köpük: taşma, güvenlik ve kalite riskleri.\n"
+                    "- Bu nedenle satırda parasal rakam yerine **Enerji verimliliği ↑, elektrot ve refrakter tüketimi ↓** gösterilir."
+                )
+            elif row["tag"] == "refractory_wear":
+                st.info(
+                    "**Refrakter aşınma seviyesi**\n\n"
+                    "- Tap sıcaklığı ve panel ΔT, refrakterlerin aldığı ısıl ve mekanik yük için iyi birer göstergedir.\n"
+                    "- Yüksek sıcaklık + yüksek panel ΔT → refrakter aşınma riski artar, duruş ihtiyacı yükselir.\n"
+                    "- AI kontrollü optimum bölge ile aşınma hızı düşürülerek refrakter ömrü uzatılabilir ve duruşlar azaltılabilir."
+                )
+            elif row["tag"] == "mix_quality":
+                st.info(
+                    "**Karışım kalitesi (homojenlik)**\n\n"
+                    "- Karışım kalitesi; kWh/t, tap sıcaklığı ve slag foaming stabilitesinin birleşik bir sonucudur.\n"
+                    "- Stabil enerji girişi ve sıcaklık profili ile yeterli köpük yüksekliği, "
+                    "banyoda daha homojen kompozisyon ve sıcaklık dağılımı sağlar.\n"
+                    "- Bu da iç hurda, yeniden işleme ve kalite şikayetlerini azaltır; "
+                    "bu yüzden tabloda **Kalite ↑, iç hurda ve yeniden işleme ↓** olarak ifade edilir."
                 )
 
     # Basit öneriler
