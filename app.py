@@ -13,7 +13,7 @@ import streamlit as st
 # ----------------------------------------------
 st.set_page_config(
     page_title="FeCr AI",
-    page_icon="apple-touch-icon.png",  # iOS ikon entegrasyonu için bırakıyoruz
+    page_icon="apple-touch-icon.png",
     layout="wide",
 )
 
@@ -963,12 +963,15 @@ def show_arc_optimizer_page(sim_mode: bool):
 # ----------------------------------------------
 def main():
     with st.sidebar:
-        # BG logosu gösterilmiyor, sadece isim
+        try:
+            st.image("apple-touch-icon.png", width=72)
+        except Exception:
+            pass
         st.markdown("### FeCr AI")
 
         sim_mode = st.toggle(
             "Simülasyon Modu",
-            value=True,  # Varsayılan: AÇIK
+            value=False,
             help="Açıkken sistem canlı veri yerine simüle edilmiş veri kullanır.",
         )
 
