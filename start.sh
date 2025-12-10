@@ -7,4 +7,8 @@ envsubst '${PORT}' < /etc/nginx/conf.d/default.conf.template > /etc/nginx/conf.d
 nginx &
 
 # Streamlit'i başlat
-streamlit run app.py --server.port=8501 --server.address=127.0.0.1 --server.enableCORS=false --server.enableXsrfProtection=false
+streamlit run app.py \
+    --server.port=8501 \
+    --server.address=0.0.0.0 \
+    --server.enableCORS=false \
+    --server.enableXsrfProtection=false
