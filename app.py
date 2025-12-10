@@ -522,6 +522,7 @@ def show_arc_optimizer_page(sim_mode: bool):
     st.markdown("### Proses Gidişatı – Zaman Trendi ve Tahmini Döküm Anı (AI)")
 
     # --- GRAFİK ---
+       # --- GRAFİK ---
     base_chart = (
         alt.Chart(combined)
         .mark_line(point=True)
@@ -530,7 +531,11 @@ def show_arc_optimizer_page(sim_mode: bool):
                 "timestamp_dt:T",
                 title="Zaman",
                 scale=alt.Scale(domain=[domain_min, domain_max]),
-                axis=alt.Axis(labelFontSize=12, titleFontSize=14),
+                axis=alt.Axis(
+                    format="%H:%M",      # 24 saat formatı (00–23)
+                    labelFontSize=12,
+                    titleFontSize=14,
+                ),
             ),
             y=alt.Y(
                 "value:Q",
@@ -561,6 +566,7 @@ def show_arc_optimizer_page(sim_mode: bool):
             width="container",
         )
     )
+
 
     tap_point_df = future_df[future_df["timestamp_dt"] == predicted_tap_time][
         ["timestamp_dt", "tap_temp_c"]
