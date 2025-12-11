@@ -4,6 +4,7 @@ import random
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+import numpy as np
 import pandas as pd
 import altair as alt
 import streamlit as st
@@ -27,6 +28,8 @@ os.makedirs("data", exist_ok=True)
 os.makedirs("models", exist_ok=True)
 
 MODEL_SAVE_PATH = "models/arc_optimizer_model.pkl"
+DIGITAL_TWIN_TARGET_HEATS = 1000   # Dijital ikiz için hedef veri sayısı
+DIGITAL_TWIN_MIN_START = 100       # Dijital ikiz eğitimine başlamak için minimum şarj
 
 # ----------------------------------------------
 # GLOBAL SESSION STATE
@@ -179,16 +182,27 @@ def get_arc_training_data(df: pd.DataFrame):
     return X, y, feature_cols, target_cols
 
 
-def train_arc_model(df: pd.DataFrame, note: str = ""):
+def train_arc_model(df: pd.DataFrame, note: str = "", min_samples: int = 20):
     """
     Arc Optimizer modeli (RandomForestRegressor) eğitilir.
     Durum, session_state'e yazılır.
+    min_samples: Bu eğitim çağrısı için gerekli minimum şarj sayısı.
     """
     st.session_state.model_status = "Eğitiliyor..."
 
     X, y, feature_cols, target_cols = get_arc_training_data(df)
     if X is None:
-        st.session_state.model_status = "Eğitim için yeterli/uygun veri yok."
+        st.session_state.model_status = "Eğitim için uygun veri bulunamadı."
+        st.error("Model eğitimi için gerekli kolonlar yok veya yeterli dolu kayıt yok.")
+        return False
+
+    if len(X) < min_samples:
+        st.session_state.model_status = (
+            f"Eğitim için veri yetersiz: {len(X)} şarj (gereken ≥ {min_samples})."
+        )
+        st.warning(
+            f"Bu mod için en az {min_samples} şarj gerekli, şu anda {len(X)} kayıt var."
+        )
         return False
 
     model = RandomForestRegressor(
@@ -557,19 +571,55 @@ def show_arc_optimizer_page(sim_mode: bool):
             key="train_mode_arc",
         )
 
-        # Eğitim moduna göre davranış
-        if train_mode == "Model Eğit":
-            st.caption("Bu buton, mevcut veri setiyle modeli bir kez eğitir.")
-            if st.button("Modeli Eğit", key="btn_train_manual"):
-                train_arc_model(df, note="(Model Eğit)")
-        elif train_mode == "Sürekli Eğit":
-            st.caption("Her sayfa yenilemesinde mevcut veriyle model güncellenir.")
-            train_arc_model(df, note="(Sürekli Eğit)")
-        elif train_mode == "Dijital İkiz Modu":
-            st.caption("Model, her zaman en güncel veriyle eğitilerek dijital ikiz gibi davranır.")
-            train_arc_model(df, note="(Dijital İkiz Modu)")
+        current_rows = len(df)
 
-        # Durum metni
+        # --- 1) Eğitim mantığı ---
+        if train_mode == "Model Eğit":
+            st.caption("Bu buton, mevcut veri setiyle modeli bir kez eğitir (demo / PoC).")
+            st.caption(f"Mevcut veri sayısı: {current_rows} şarj (önerilen ≥ 20).")
+
+            if st.button("Modeli Eğit", key="btn_train_manual"):
+                train_arc_model(df, note="(Model Eğit)", min_samples=20)
+
+        elif train_mode == "Sürekli Eğit":
+            st.caption("Her sayfa yenilemesinde mevcut veriyle model güncellenir (demo modu).")
+            st.caption(f"Mevcut veri sayısı: {current_rows} şarj (önerilen ≥ 20).")
+
+            train_arc_model(df, note="(Sürekli Eğit)", min_samples=20)
+
+        elif train_mode == "Dijital İkiz Modu":
+            st.caption(
+                "Dijital ikiz modu için hedef, en az 1000 şarjlık veriyle sürekli öğrenen bir modeldir. "
+                "Bu modda model, her zaman en güncel verilerle yeniden eğitilir."
+            )
+            st.caption(
+                f"Veri ilerleme durumu: **{current_rows} / {DIGITAL_TWIN_TARGET_HEATS}** şarj"
+            )
+
+            if current_rows < DIGITAL_TWIN_MIN_START:
+                st.warning(
+                    f"Dijital ikiz eğitimine başlamak için en az {DIGITAL_TWIN_MIN_START} şarj gerekiyor; "
+                    f"şu an {current_rows} şarj var."
+                )
+            else:
+                trained = train_arc_model(
+                    df,
+                    note="(Dijital İkiz Modu)",
+                    min_samples=DIGITAL_TWIN_MIN_START,
+                )
+                if trained:
+                    if current_rows < DIGITAL_TWIN_TARGET_HEATS:
+                        st.session_state.model_status = (
+                            f"Dijital İkiz **öğrenme aşamasında** "
+                            f"({current_rows}/{DIGITAL_TWIN_TARGET_HEATS} şarj)"
+                        )
+                    else:
+                        st.session_state.model_status = (
+                            f"Dijital İkiz **hazır** ✅ "
+                            f"({current_rows} şarj ile eğitildi)"
+                        )
+
+        # --- 2) Durum yazısı ---
         st.write(f"**Durum:** {st.session_state.model_status}")
         if st.session_state.model_last_train_time:
             st.caption(
@@ -580,9 +630,72 @@ def show_arc_optimizer_page(sim_mode: bool):
         else:
             st.caption("Model henüz hiç eğitilmedi.")
 
-        # Varsa, son heat için model tahmini göster (veriye dokunmadan)
         model, feat_cols, target_cols = load_arc_model()
-        if model is not None and feat_cols is not None and target_cols is not None:
+
+        # --- 3) Dijital İkiz What-if Simülasyonu ---
+        if (
+            train_mode == "Dijital İkiz Modu"
+            and model is not None
+            and feat_cols is not None
+            and current_rows >= DIGITAL_TWIN_MIN_START
+        ):
+            st.markdown("#### Dijital İkiz – What-if Simülasyonu")
+
+            last_row_for_defaults = df.iloc[-1]
+
+            # Varsayılanları son şarjdan al, sınırları biraz geniş tut
+            def num_input(name, col_name, min_v, max_v, step, fmt="%.1f"):
+                default = float(last_row_for_defaults.get(col_name, (min_v + max_v) / 2))
+                return st.number_input(
+                    name,
+                    min_value=min_v,
+                    max_value=max_v,
+                    value=float(default),
+                    step=step,
+                    format=fmt,
+                    key=f"dtwin_{col_name}",
+                )
+
+            c1, c2 = st.columns(2)
+            with c1:
+                tap_weight = num_input("Tap Weight (t)", "tap_weight_t", 20.0, 60.0, 0.5)
+                duration = num_input("Süre (dk)", "duration_min", 30.0, 90.0, 1.0, "%.0f")
+                energy = num_input("Enerji (kWh)", "energy_kwh", 1000.0, 5000.0, 50.0)
+                o2_flow = num_input("O2 Debisi (Nm³/h)", "o2_flow_nm3h", 500.0, 2000.0, 10.0)
+            with c2:
+                slag = num_input("Slag Foaming (0–10)", "slag_foaming_index", 0.0, 10.0, 0.5)
+                panel_dT = num_input("Panel ΔT (°C)", "panel_delta_t_c", 5.0, 40.0, 0.5)
+                elec = num_input("Elektrot (kg/şarj)", "electrode_kg_per_heat", 1.0, 4.0, 0.05)
+
+            if st.button("Simülasyonu Çalıştır", key="btn_dtwin_sim"):
+                inp = {
+                    "tap_weight_t": tap_weight,
+                    "duration_min": duration,
+                    "energy_kwh": energy,
+                    "o2_flow_nm3h": o2_flow,
+                    "slag_foaming_index": slag,
+                    "panel_delta_t_c": panel_dT,
+                    "electrode_kg_per_heat": elec,
+                }
+
+                row_df = pd.DataFrame([inp])[feat_cols]
+                row_df = row_df.fillna(row_df.mean())
+
+                try:
+                    preds = model.predict(row_df)[0]
+                    pred_dict = dict(zip(target_cols, preds))
+
+                    kwh_pred = float(pred_dict.get("kwh_per_t", float("nan")))
+                    tap_pred = float(pred_dict.get("tap_temp_c", float("nan")))
+
+                    st.markdown("**AI Tahmin (Dijital İkiz):**")
+                    st.write(f"- kWh/t ≈ **{kwh_pred:.1f}**")
+                    st.write(f"- Tap T ≈ **{tap_pred:.0f} °C**")
+                except Exception as e:
+                    st.error(f"Tahmin hesaplanırken hata oluştu: {e}")
+
+        # Ayrıca, Dijital İkiz dışında da son şarj için basit tahmin gösterebiliriz
+        elif model is not None and feat_cols is not None:
             missing = [c for c in feat_cols if c not in df.columns]
             if not missing:
                 last_features = df.iloc[[-1]][feat_cols].fillna(df[feat_cols].mean())
