@@ -94,12 +94,13 @@ runtime_data = load_runtime_data()
 # ----------------------------------------------
 # SİMÜLASYON VERİLERİ
 # ----------------------------------------------
-def generate_simulation_runtime_data(n: int = 15):
-    """Simülasyon Modu için örnek şarj datası üretir."""
+def generate_simulation_runtime_data(n: int = 1000):
+    """Simülasyon Modu için örnek şarj datası üretir (≈1000 saat ≈ 42 gün)."""
     sim_list = []
     now = datetime.now(TZ)
 
     for i in range(n):
+        # 1000 şarj ≈ 1000 saat ~ 41.6 gün geçmişe yayılır
         ts = now - timedelta(hours=(n - 1 - i))
         heat_id = f"SIM-{i+1}"
 
