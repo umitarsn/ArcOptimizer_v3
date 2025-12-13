@@ -21,6 +21,17 @@ st.set_page_config(
     layout="wide",
 )
 
+# ✅ Sidebar genişlik fix (uzun Türkçe metinler harf harf bölünmesin)
+st.markdown(
+    """
+    <style>
+    section[data-testid="stSidebar"] { width: 340px !important; }
+    section[data-testid="stSidebar"] > div { width: 340px !important; }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
 TZ = ZoneInfo("Europe/Istanbul")
 
 SETUP_SAVE_PATH = "data/saved_inputs.json"
@@ -577,13 +588,11 @@ def show_arc_optimizer_page(sim_mode: bool):
 
         st.markdown("### 🎛️ Operasyon Paneli")
 
-        # 1) AI Karşılaştırma Özeti (3 satır tablo)  ✅ (Mini trend kaldırıldı)
+        # ✅ Mini trend kaldırıldı → yerine 3 satır özet tablo
         st.markdown("#### 🧠 AI Karşılaştırma Özeti")
 
-        min_needed = 3
         valid = df.dropna(subset=["kwh_per_t", "electrode_kg_per_heat", "tap_temp_c"]).copy()
-
-        if len(valid) < min_needed:
+        if len(valid) < 3:
             st.info("Bu özet tablo için en az 3 dolu şarj kaydı gerekir (kWh/t, elektrot, Tap T).")
         else:
             worst3 = valid.nlargest(3, "kwh_per_t")
@@ -591,10 +600,11 @@ def show_arc_optimizer_page(sim_mode: bool):
             last3 = valid.tail(3)
 
             def _row(subdf):
-                kwh = float(subdf["kwh_per_t"].mean())
-                elec = float(subdf["electrode_kg_per_heat"].mean())
-                tap = float(subdf["tap_temp_c"].mean())
-                return kwh, elec, tap
+                return (
+                    float(subdf["kwh_per_t"].mean()),
+                    float(subdf["electrode_kg_per_heat"].mean()),
+                    float(subdf["tap_temp_c"].mean()),
+                )
 
             w_kwh, w_elec, w_tap = _row(worst3)
             l_kwh, l_elec, l_tap = _row(last3)
@@ -635,7 +645,6 @@ def show_arc_optimizer_page(sim_mode: bool):
                     },
                 ]
             )
-
             st.table(summary_df)
 
         # 2) Alarm bandı
@@ -664,7 +673,7 @@ def show_arc_optimizer_page(sim_mode: bool):
         else:
             st.success("✅ Proses stabil – belirgin alarm yok")
 
-        # 3) En iyi 10 vs Son 10 (istersen kaldırabiliriz, şimdilik duruyor)
+        # 3) En iyi 10 vs Son 10 (istersen kaldırılabilir)
         st.markdown("#### 📊 En İyi 10 vs Son 10 Şarj Kıyas")
         if df["kwh_per_t"].notna().sum() >= 20:
             best10 = df.nsmallest(10, "kwh_per_t")
@@ -756,7 +765,6 @@ def show_arc_optimizer_page(sim_mode: bool):
 
         model, feat_cols, target_cols = load_arc_model()
 
-        # What-if (Dijital ikiz modunda)
         if train_mode == "Dijital İkiz Modu" and model is not None and feat_cols is not None and current_rows >= DIGITAL_TWIN_MIN_START:
             st.markdown("#### Dijital İkiz – What-if Simülasyonu")
 
@@ -768,7 +776,7 @@ def show_arc_optimizer_page(sim_mode: bool):
                     default = float(default_raw)
                 except Exception:
                     default = float((min_v + max_v) / 2)
-                default = max(min_v, min(default, max_v))  # clamp
+                default = max(min_v, min(default, max_v))
                 return st.number_input(
                     name,
                     min_value=min_v,
@@ -975,26 +983,15 @@ def show_arc_optimizer_page(sim_mode: bool):
     rows = []
     total_gain_per_t = 0.0
 
-    # Enerji
     if pd.notna(last.get("kwh_per_t")) and avg_kwh_t and not pd.isna(avg_kwh_t):
         real = float(last["kwh_per_t"])
         target = max(avg_kwh_t - 5.0, 0.0)
         diff = real - target
         gain = abs(diff) * ENERGY_PRICE_EUR_PER_KWH
         total_gain_per_t += gain
-        rows.append(
-            {
-                "tag": "kwh_per_t",
-                "deg": "Enerji tüketimi",
-                "akt": f"{real:.1f} kWh/t",
-                "pot": f"{target:.1f} kWh/t",
-                "fark": f"{diff:+.1f} kWh/t",
-                "kazanc": f"{gain:.2f} €/t",
-                "type": "cost",
-            }
-        )
+        rows.append({"tag": "kwh_per_t", "deg": "Enerji tüketimi", "akt": f"{real:.1f} kWh/t", "pot": f"{target:.1f} kWh/t",
+                     "fark": f"{diff:+.1f} kWh/t", "kazanc": f"{gain:.2f} €/t", "type": "cost"})
 
-    # Elektrot (kg/t)
     if pd.notna(last.get("electrode_kg_per_heat")) and pd.notna(last.get("tap_weight_t")):
         tap_w = float(last["tap_weight_t"]) or 0.0
         if tap_w > 0:
@@ -1003,71 +1000,31 @@ def show_arc_optimizer_page(sim_mode: bool):
             diff = real_pt - target_pt
             gain = abs(diff) * ELECTRODE_PRICE_EUR_PER_KG
             total_gain_per_t += gain
-            rows.append(
-                {
-                    "tag": "electrode",
-                    "deg": "Elektrot tüketimi",
-                    "akt": f"{real_pt:.3f} kg/t",
-                    "pot": f"{target_pt:.3f} kg/t",
-                    "fark": f"{diff:+.3f} kg/t",
-                    "kazanc": f"{gain:.2f} €/t",
-                    "type": "cost",
-                }
-            )
+            rows.append({"tag": "electrode", "deg": "Elektrot tüketimi", "akt": f"{real_pt:.3f} kg/t", "pot": f"{target_pt:.3f} kg/t",
+                         "fark": f"{diff:+.3f} kg/t", "kazanc": f"{gain:.2f} €/t", "type": "cost"})
 
-    # Tap sıcaklığı
     if pd.notna(last.get("tap_temp_c")) and avg_tap_temp and not pd.isna(avg_tap_temp):
         real = float(last["tap_temp_c"])
         target = float(avg_tap_temp)
         diff = real - target
-        rows.append(
-            {
-                "tag": "tap_temp_c",
-                "deg": "Tap sıcaklığı optimizasyonu",
-                "akt": f"{real:.0f} °C",
-                "pot": f"{target:.0f} °C",
-                "fark": f"{diff:+.0f} °C",
-                "kazanc": "0.03–0.10 €/t + Kalite ↑",
-                "type": "mixed",
-            }
-        )
+        rows.append({"tag": "tap_temp_c", "deg": "Tap sıcaklığı optimizasyonu", "akt": f"{real:.0f} °C", "pot": f"{target:.0f} °C",
+                     "fark": f"{diff:+.0f} °C", "kazanc": "0.03–0.10 €/t + Kalite ↑", "type": "mixed"})
 
-    # Panel ΔT
     if pd.notna(last.get("panel_delta_t_c")):
         real = float(last["panel_delta_t_c"])
         target = 20.0
         diff = real - target
-        rows.append(
-            {
-                "tag": "panel_delta_t",
-                "deg": "Panel ΔT",
-                "akt": f"{real:.1f} °C",
-                "pot": f"{target:.1f} °C",
-                "fark": f"{diff:+.1f} °C",
-                "kazanc": "Kalite ↑",
-                "type": "quality",
-            }
-        )
+        rows.append({"tag": "panel_delta_t", "deg": "Panel ΔT", "akt": f"{real:.1f} °C", "pot": f"{target:.1f} °C",
+                     "fark": f"{diff:+.1f} °C", "kazanc": "Kalite ↑", "type": "quality"})
 
-    # Slag foaming
     slag_val = None
     if last.get("slag_foaming_index") is not None:
         slag_val = float(last["slag_foaming_index"])
         target = 7.0
         diff = slag_val - target
-        rows.append(
-            {
-                "tag": "slag_foaming",
-                "deg": "Köpük yüksekliği / slag foaming",
-                "akt": f"{slag_val:.1f}",
-                "pot": f"{target:.1f}",
-                "fark": f"{diff:+.1f}",
-                "kazanc": "Enerji verimliliği ↑, elektrot ve refrakter tüketimi ↓",
-                "type": "quality",
-            }
-        )
+        rows.append({"tag": "slag_foaming", "deg": "Köpük yüksekliği / slag foaming", "akt": f"{slag_val:.1f}", "pot": f"{target:.1f}",
+                     "fark": f"{diff:+.1f}", "kazanc": "Enerji verimliliği ↑, elektrot ve refrakter tüketimi ↓", "type": "quality"})
 
-    # Refrakter risk (basit)
     if pd.notna(last.get("tap_temp_c")) and pd.notna(last.get("panel_delta_t_c")):
         t_act = float(last["tap_temp_c"])
         dT_act = float(last["panel_delta_t_c"])
@@ -1080,23 +1037,11 @@ def show_arc_optimizer_page(sim_mode: bool):
         else:
             refr_level = "Düşük"
 
-        rows.append(
-            {
-                "tag": "refractory_wear",
-                "deg": "Refrakter aşınma seviyesi",
-                "akt": refr_level,
-                "pot": "AI kontrollü optimum bölge",
-                "fark": "-",
-                "kazanc": "Refrakter ömrü ↑, planlı duruşlar dışında duruş ↓",
-                "type": "quality",
-            }
-        )
+        rows.append({"tag": "refractory_wear", "deg": "Refrakter aşınma seviyesi", "akt": refr_level, "pot": "AI kontrollü optimum bölge",
+                     "fark": "-", "kazanc": "Refrakter ömrü ↑, planlı duruşlar dışında duruş ↓", "type": "quality"})
 
-    # Karışım kalitesi (basit skor)
-    if (
-        pd.notna(last.get("kwh_per_t")) and avg_kwh_t and not pd.isna(avg_kwh_t)
-        and pd.notna(last.get("tap_temp_c")) and avg_tap_temp and not pd.isna(avg_tap_temp)
-    ):
+    if (pd.notna(last.get("kwh_per_t")) and avg_kwh_t and not pd.isna(avg_kwh_t)
+        and pd.notna(last.get("tap_temp_c")) and avg_tap_temp and not pd.isna(avg_tap_temp)):
         score = 0
         if slag_val is not None and slag_val >= 7.0:
             score += 1
@@ -1106,17 +1051,8 @@ def show_arc_optimizer_page(sim_mode: bool):
             score += 1
 
         mix_level = "İyi" if score == 3 else ("Orta" if score == 2 else "Riskli")
-        rows.append(
-            {
-                "tag": "mix_quality",
-                "deg": "Karışım kalitesi (homojenlik)",
-                "akt": mix_level,
-                "pot": "AI ile stabil ve homojen bölge",
-                "fark": "-",
-                "kazanc": "Kalite ↑, iç hurda ve yeniden işleme ↓",
-                "type": "quality",
-            }
-        )
+        rows.append({"tag": "mix_quality", "deg": "Karışım kalitesi (homojenlik)", "akt": mix_level, "pot": "AI ile stabil ve homojen bölge",
+                     "fark": "-", "kazanc": "Kalite ↑, iç hurda ve yeniden işleme ↓", "type": "quality"})
 
     widths = [1.0, 2.0, 1.3, 1.3, 1.1, 1.8, 0.5]
     hcols = st.columns(widths)
@@ -1146,7 +1082,6 @@ def show_arc_optimizer_page(sim_mode: bool):
         f"≈ **{total_gain_per_t:,.2f} €/t**"
     )
 
-    # Öneriler
     st.markdown("### Model Önerileri (Örnek / Demo Mantık)")
     suggestions = []
 
@@ -1184,34 +1119,34 @@ def main():
         if sim_mode:
             ensure_simulation_data_initialized()
 
-            st.session_state.sim_stream_enabled = st.toggle(
-                "9000 şarj zamanla oku",
-                value=st.session_state.sim_stream_enabled,
-                help="Açıkken 1000 historical sonrası kalan veriyi batch ile ekleyerek akışı simüle eder.",
-            )
-
+            st.markdown("### 🔄 Veri Akışı")
             batch = st.slider(
-                "Akış hızı (şarj/yenileme)",
+                "Akış hızı (şarj / yenileme)",
                 min_value=1,
                 max_value=500,
                 value=SIM_STREAM_BATCH_DEFAULT,
                 step=1,
             )
 
-            cA, cB = st.columns(2)
-            with cA:
-                if st.button("Akışı ilerlet"):
+            c1, c2 = st.columns([2, 1])
+            with c1:
+                st.session_state.sim_stream_enabled = st.toggle(
+                    "9000 şarjı zamanla oku",
+                    value=st.session_state.sim_stream_enabled,
+                    help="Açıkken 1000 historical sonrası kalan veriyi batch ile ekleyerek akışı simüle eder.",
+                )
+            with c2:
+                if st.button("▶️ İlerlet"):
                     advanced = advance_sim_stream(batch)
                     if not advanced:
-                        st.info("Akış tamamlandı: 10.000/10.000.")
+                        st.info("Akış tamamlandı: 10.000 / 10.000")
                     st.rerun()
 
-            with cB:
-                st.session_state.sim_stream_autostep = st.toggle(
-                    "Akış açıkken otomatik ilerlet",
-                    value=st.session_state.sim_stream_autostep,
-                    help="Sayfa her render olduğunda bir kez batch kadar ilerletir (autorefresh yok).",
-                )
+            st.session_state.sim_stream_autostep = st.toggle(
+                "Otomatik ilerlet",
+                value=st.session_state.sim_stream_autostep,
+                help="Sayfa her render olduğunda bir kez batch kadar ilerletir (autorefresh yok).",
+            )
 
             if st.session_state.sim_stream_enabled and st.session_state.sim_stream_autostep:
                 token = f"{st.session_state.sim_stream_progress}-{datetime.now(TZ).strftime('%Y%m%d%H%M%S')}"
