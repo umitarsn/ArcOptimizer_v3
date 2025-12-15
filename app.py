@@ -1130,9 +1130,10 @@ def main():
 
             c1, c2 = st.columns([2, 1])
             with c1:
+                # ✅ default enabled
                 st.session_state.sim_stream_enabled = st.toggle(
                     "9000 şarjı zamanla oku",
-                    value=st.session_state.sim_stream_enabled,
+                    value=st.session_state.get("sim_stream_enabled", True),
                     help="Açıkken 1000 historical sonrası kalan veriyi batch ile ekleyerek akışı simüle eder.",
                 )
             with c2:
@@ -1142,9 +1143,10 @@ def main():
                         st.info("Akış tamamlandı: 10.000 / 10.000")
                     st.rerun()
 
+            # ✅ default enabled
             st.session_state.sim_stream_autostep = st.toggle(
                 "Otomatik ilerlet",
-                value=st.session_state.sim_stream_autostep,
+                value=st.session_state.get("sim_stream_autostep", True),
                 help="Sayfa her render olduğunda bir kez batch kadar ilerletir (autorefresh yok).",
             )
 
@@ -1159,7 +1161,12 @@ def main():
         else:
             st.session_state.sim_data = None
 
-        page = st.radio("Sayfa Seç", ["1. Setup", "2. Canlı Veri", "3. Arc Optimizer"])
+        # ✅ Arc Optimizer default seçili
+        page = st.radio(
+            "Sayfa Seç",
+            ["1. Setup", "2. Canlı Veri", "3. Arc Optimizer"],
+            index=2,
+        )
 
     if page == "1. Setup":
         show_setup_form()
@@ -1167,7 +1174,6 @@ def main():
         show_runtime_page(sim_mode)
     else:
         show_arc_optimizer_page(sim_mode)
-
 
 if __name__ == "__main__":
     main()
