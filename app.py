@@ -29,7 +29,6 @@ st.markdown(
     section[data-testid="stSidebar"] { width: 340px !important; }
     section[data-testid="stSidebar"] > div { width: 340px !important; }
 
-    /* küçük düzen dokunuşları */
     .block-container { padding-top: 1.2rem; padding-bottom: 2.0rem; }
     </style>
     """,
@@ -645,10 +644,9 @@ def show_runtime_page(sim_mode: bool):
 
 
 # =========================================================
-# 3) ARC OPTIMIZER (SENİN İŞARETLEDİĞİN DÜZEN)
-# - "En kötü / En iyi" yok
-# - "En iyi 10 vs Son 10" kaldırıldı
-# - What-if sağ kutunun ALTINDA (model alanının içinde)
+# 3) ARC OPTIMIZER
+# - “En kötü/En iyi” yok
+# - What-if sağ kutunun altında
 # =========================================================
 def show_arc_optimizer_page(sim_mode: bool):
     st.markdown("## 3. Arc Optimizer – Trendler, KPI ve Öneriler")
@@ -687,14 +685,14 @@ def show_arc_optimizer_page(sim_mode: bool):
 
         st.markdown("#### 🚨 Proses Durumu / Alarmlar")
         alarms = []
-        # referans: son10 ortalama
+
         if "kwh_per_t" in df.columns and df["kwh_per_t"].notna().sum() >= 10 and pd.notna(last.get("kwh_per_t")):
             ref = df["kwh_per_t"].dropna().tail(10).mean()
             if float(last["kwh_per_t"]) > ref * 1.05:
                 alarms.append("⚡ kWh/t son 10 ortalamasına göre yüksek (+5%)")
 
         if "tap_temp_c" in df.columns and df["tap_temp_c"].notna().sum() >= 10 and pd.notna(last.get("tap_temp_c")):
-            refT (:= df["tap_temp_c"].dropna().tail(10).mean())
+            refT = df["tap_temp_c"].dropna().tail(10).mean()
             if abs(float(last["tap_temp_c"]) - float(refT)) > 15:
                 alarms.append("🔥 Tap sıcaklığı sapması > 15°C")
 
@@ -715,7 +713,7 @@ def show_arc_optimizer_page(sim_mode: bool):
         trend_chart(df, cols=("kwh_per_t", "tap_temp_c", "electrode_kg_per_heat", "panel_delta_t_c", "slag_foaming_index"), height=420)
 
     # -------------------------
-    # SAĞ KOLON: AI MODEL + (ALTINDA) WHAT-IF
+    # SAĞ KOLON: AI MODEL + WHAT-IF
     # -------------------------
     with right:
         st.markdown("### 🤖 AI Model / Eğitim Modu")
@@ -751,10 +749,7 @@ def show_arc_optimizer_page(sim_mode: bool):
             )
 
             if current_rows < DIGITAL_TWIN_MIN_START:
-                st.warning(
-                    f"Dijital ikiz için en az {DIGITAL_TWIN_MIN_START} şarj gerekiyor; "
-                    f"şu an {current_rows} var."
-                )
+                st.warning(f"Dijital ikiz için en az {DIGITAL_TWIN_MIN_START} şarj gerekiyor; şu an {current_rows} var.")
             else:
                 if current_rows > int(st.session_state.model_last_trained_rows_marker):
                     train_arc_model(df, note="(Dijital İkiz)", min_samples=DIGITAL_TWIN_MIN_START, silent=True)
@@ -775,7 +770,7 @@ def show_arc_optimizer_page(sim_mode: bool):
                 f"Toplam eğitim: {st.session_state.model_train_count}"
             )
 
-        # ✅ What-if: sağ kutunun ALTINDA ve daha kompakt
+        # ✅ What-if
         st.markdown("---")
         st.markdown("### 🧪 What-if Simülasyonu (Arc Optimizer)")
 
@@ -828,7 +823,6 @@ def show_arc_optimizer_page(sim_mode: bool):
                 except Exception as e:
                     st.error(f"Tahmin hatası: {e}")
 
-        # Ton başına kazanç (yönetim için de işe yarıyor)
         st.markdown("---")
         st.markdown("### 💰 Proses Kazanç (Ton Başına)")
         m = money_pack(df)
@@ -863,7 +857,8 @@ def show_lab_simulation(sim_mode: bool):
 
     if st.session_state.sim_stream_autorefresh:
         st.session_state.sim_stream_refresh_sec = st.number_input(
-            "Auto-refresh (sn)", min_value=1, max_value=60, value=int(st.session_state.sim_stream_refresh_sec), step=1
+            "Auto-refresh (sn)", min_value=1, max_value=60,
+            value=int(st.session_state.sim_stream_refresh_sec), step=1
         )
         html_autorefresh(int(st.session_state.sim_stream_refresh_sec))
 
@@ -908,7 +903,6 @@ def show_lab_simulation(sim_mode: bool):
 
 # =========================================================
 # PERSONA SAYFALARI
-# (Basit ve anlaşılır tutuyoruz)
 # =========================================================
 def show_exec_page(sim_mode: bool):
     st.markdown("## Executive (CEO / CFO) – Value & Risk")
