@@ -52,48 +52,52 @@ SIM_STREAM_BATCH_DEFAULT = 25  # her “ilerlet”te eklenecek heat sayısı
 
 
 # ----------------------------------------------
-# SESSION STATE
+# SESSION STATE INIT
 # ----------------------------------------------
-if "info_state" not in st.session_state:
-    st.session_state.info_state = {}
+def _init_state():
+    if "info_state" not in st.session_state:
+        st.session_state.info_state = {}
 
-if "profit_info_state" not in st.session_state:
-    st.session_state.profit_info_state = {}
+    if "profit_info_state" not in st.session_state:
+        st.session_state.profit_info_state = {}
 
-# Simülasyon cache
-if "sim_data" not in st.session_state:
-    st.session_state.sim_data = None
+    # Simülasyon cache
+    if "sim_data" not in st.session_state:
+        st.session_state.sim_data = None
+    if "sim_full_data" not in st.session_state:
+        st.session_state.sim_full_data = None
 
-if "sim_full_data" not in st.session_state:
-    st.session_state.sim_full_data = None
+    # Defaults (toggle’lar buradan beslenir)
+    if "sim_stream_enabled" not in st.session_state:
+        st.session_state.sim_stream_enabled = True
+    if "sim_stream_autostep" not in st.session_state:
+        st.session_state.sim_stream_autostep = True
 
-if "sim_mode_flag" not in st.session_state:
-    st.session_state.sim_mode_flag = None
+    if "sim_stream_progress" not in st.session_state:
+        st.session_state.sim_stream_progress = DIGITAL_TWIN_HISTORICAL_HEATS
 
-# ✅ default AÇIK
-if "sim_stream_enabled" not in st.session_state:
-    st.session_state.sim_stream_enabled = True
+    # ✅ autostep’in aynı progress'te tekrar çalışmasını engelle
+    if "sim_stream_last_step_progress" not in st.session_state:
+        st.session_state.sim_stream_last_step_progress = None
 
-if "sim_stream_progress" not in st.session_state:
-    st.session_state.sim_stream_progress = DIGITAL_TWIN_HISTORICAL_HEATS
+    # Auto refresh (gerçek “zamanla akış” için şart)
+    if "sim_stream_autorefresh" not in st.session_state:
+        st.session_state.sim_stream_autorefresh = True
+    if "sim_stream_refresh_sec" not in st.session_state:
+        st.session_state.sim_stream_refresh_sec = 2
 
-# ✅ default AÇIK
-if "sim_stream_autostep" not in st.session_state:
-    st.session_state.sim_stream_autostep = True
+    # Model eğitim durumu
+    if "model_status" not in st.session_state:
+        st.session_state.model_status = "Henüz eğitilmedi."
+        st.session_state.model_last_train_time = None
+        st.session_state.model_last_train_rows = 0
+        st.session_state.model_train_count = 0
 
-# ✅ autostep’in aynı progress'te tekrar çalışmasını engelle
-if "sim_stream_last_step_progress" not in st.session_state:
-    st.session_state.sim_stream_last_step_progress = None
+    if "model_last_trained_rows_marker" not in st.session_state:
+        st.session_state.model_last_trained_rows_marker = 0
 
-# Model eğitim durumu
-if "model_status" not in st.session_state:
-    st.session_state.model_status = "Henüz eğitilmedi."
-    st.session_state.model_last_train_time = None
-    st.session_state.model_last_train_rows = 0
-    st.session_state.model_train_count = 0
 
-if "model_last_trained_rows_marker" not in st.session_state:
-    st.session_state.model_last_trained_rows_marker = 0
+_init_state()
 
 
 # ----------------------------------------------
@@ -177,13 +181,17 @@ def generate_simulation_full_data(total_n: int = SIM_STREAM_TOTAL):
     return data
 
 
-def ensure_simulation_data_initialized():
+def ensure_simulation_data_initialized(force_reset: bool = False):
+    """
+    force_reset=True: simülasyon datasını ve progress’i sıfırdan başlatır.
+    """
     if st.session_state.sim_full_data is None:
         st.session_state.sim_full_data = generate_simulation_full_data(SIM_STREAM_TOTAL)
 
-    if st.session_state.sim_data is None:
+    if force_reset or st.session_state.sim_data is None:
         st.session_state.sim_stream_progress = DIGITAL_TWIN_HISTORICAL_HEATS
         st.session_state.sim_data = st.session_state.sim_full_data[:DIGITAL_TWIN_HISTORICAL_HEATS]
+        st.session_state.sim_stream_last_step_progress = None
 
 
 def advance_sim_stream(batch: int):
@@ -237,7 +245,7 @@ def get_arc_training_data(df: pd.DataFrame):
     ]
     target_cols = ["kwh_per_t", "tap_temp_c"]
 
-    X = sub[feature_cols].fillna(sub[feature_cols].mean())
+    X = sub[feature_cols].fillna(sub[feature_cols].mean(numeric_only=True))
     y = sub[target_cols]
 
     if len(X) < 10:
@@ -313,6 +321,39 @@ def load_sheets():
     except Exception as e:
         st.error(f"Excel dosyası yüklenemedi: {e}")
         return {}
+
+
+# ----------------------------------------------
+# COMMON HELPERS
+# ----------------------------------------------
+def get_data_source(sim_mode: bool):
+    return st.session_state.sim_data if sim_mode else runtime_data
+
+
+def build_df(data_source):
+    df = pd.DataFrame(data_source)
+    if df.empty:
+        return df
+    try:
+        df["timestamp_dt"] = pd.to_datetime(df["timestamp"], utc=True).dt.tz_convert(TZ)
+    except Exception:
+        df["timestamp_dt"] = pd.to_datetime(df["timestamp"], errors="coerce")
+    df = df.sort_values("timestamp_dt")
+    return df
+
+
+def safe_pct(series: pd.Series, q: float):
+    s = series.dropna()
+    if len(s) == 0:
+        return None
+    return float(np.percentile(s.values, q))
+
+
+def money_fmt(x):
+    try:
+        return f"{float(x):,.2f}"
+    except Exception:
+        return "-"
 
 
 # ----------------------------------------------
@@ -491,18 +532,12 @@ def show_runtime_page(sim_mode: bool):
                 save_runtime_data(runtime_data)
                 st.success(f"Şarj kaydı eklendi: {heat_id}")
 
-    data_source = st.session_state.sim_data if sim_mode else runtime_data
+    data_source = get_data_source(sim_mode)
     if not data_source:
         st.info("Henüz canlı veri yok.")
         return
 
-    df = pd.DataFrame(data_source)
-    try:
-        df["timestamp_dt"] = pd.to_datetime(df["timestamp"], utc=True).dt.tz_convert(TZ)
-        df = df.sort_values("timestamp_dt")
-    except Exception:
-        df["timestamp_dt"] = pd.to_datetime(df["timestamp"], errors="coerce")
-        df = df.sort_values("timestamp_dt")
+    df = build_df(data_source)
 
     st.markdown("### Kayıtlı Veriler")
     st.dataframe(
@@ -538,25 +573,457 @@ def show_runtime_page(sim_mode: bool):
 
 
 # ----------------------------------------------
-# 3) ARC OPTIMIZER
+# EXECUTIVE DASHBOARD (İşletme Müdürü)
 # ----------------------------------------------
-def show_arc_optimizer_page(sim_mode: bool):
-    st.markdown("## 3. Arc Optimizer – Trendler, KPI ve Öneriler")
+def show_executive_dashboard(sim_mode: bool):
+    st.markdown("## Executive Dashboard – Büyük Resim (KPI + Kalite + Finans)")
     if sim_mode:
-        st.info("🧪 **Simülasyon Modu Aktif.** Arc Optimizer çıktıları simüle edilen veri üzerinden hesaplanır.")
+        st.info("🧪 Demo/Simülasyon datası gösteriliyor.")
 
-    data_source = st.session_state.sim_data if sim_mode else runtime_data
+    data_source = get_data_source(sim_mode)
     if not data_source:
-        st.info("Önce 2. sayfadan veri ekleyin.")
+        st.info("Önce veri ekleyin (2. Canlı Veri) veya Simülasyon Modu açın.")
         return
 
-    df = pd.DataFrame(data_source)
-    try:
-        df["timestamp_dt"] = pd.to_datetime(df["timestamp"], utc=True).dt.tz_convert(TZ)
-        df = df.sort_values("timestamp_dt")
-    except Exception:
-        df["timestamp_dt"] = pd.to_datetime(df["timestamp"], errors="coerce")
-        df = df.sort_values("timestamp_dt")
+    df = build_df(data_source)
+    if df.empty:
+        st.info("Veri boş.")
+        return
+
+    # Dönem filtresi (basit)
+    with st.expander("📅 Dönem / Filtre", expanded=True):
+        c1, c2, c3 = st.columns([1.2, 1.2, 2.0])
+        with c1:
+            period = st.selectbox("Dönem", ["Son 7 gün", "Son 30 gün", "Tümü"], index=0)
+        with c2:
+            target_kwh_reduction = st.number_input("AI hedefi (kWh/t iyileşme)", value=5.0, step=1.0)
+        with c3:
+            st.caption("Not: Demo’da kalite değişkenleri KPI bandlarıyla temsil edilir. Gerçek projede grade/kimya/yield eklenir.")
+
+    max_t = df["timestamp_dt"].max()
+    if period == "Son 7 gün":
+        dfp = df[df["timestamp_dt"] >= (max_t - timedelta(days=7))].copy()
+    elif period == "Son 30 gün":
+        dfp = df[df["timestamp_dt"] >= (max_t - timedelta(days=30))].copy()
+    else:
+        dfp = df.copy()
+
+    if dfp.empty:
+        st.warning("Seçilen dönemde veri yok.")
+        return
+
+    # KPI’lar
+    kwh = dfp["kwh_per_t"].dropna()
+    elec_pt = (dfp["electrode_kg_per_heat"] / dfp["tap_weight_t"]).replace([np.inf, -np.inf], np.nan)
+    dur = dfp["duration_min"].dropna()
+    tap = dfp["tap_temp_c"].dropna()
+
+    last = dfp.iloc[-1]
+
+    # Percentile bandları (kötü/iyi demeden)
+    p10_kwh = safe_pct(kwh, 10)
+    p50_kwh = safe_pct(kwh, 50)
+    p90_kwh = safe_pct(kwh, 90)
+
+    p10_e = safe_pct(elec_pt, 10)
+    p50_e = safe_pct(elec_pt, 50)
+    p90_e = safe_pct(elec_pt, 90)
+
+    # Hedef bandı (basit): median - target_kwh_reduction
+    target_kwh = (p50_kwh - float(target_kwh_reduction)) if p50_kwh is not None else None
+
+    # Outlier sayacı: hedefin %5 üstü
+    outlier_cnt = 0
+    if target_kwh is not None:
+        outlier_cnt = int((kwh > target_kwh * 1.05).sum())
+
+    # Finans (€/t)
+    ENERGY_PRICE_EUR_PER_KWH = 0.12
+    ELECTRODE_PRICE_EUR_PER_KG = 3.0
+
+    fin_rows = []
+    total_gain_eur_per_t = 0.0
+
+    if target_kwh is not None and len(kwh) > 0:
+        # mevcut ortalama vs hedef
+        real_avg = float(kwh.mean())
+        diff = max(0.0, real_avg - float(target_kwh))
+        gain = diff * ENERGY_PRICE_EUR_PER_KWH
+        total_gain_eur_per_t += gain
+        fin_rows.append({"Kalem": "Enerji", "Mevcut": f"{real_avg:.1f} kWh/t", "Hedef": f"{target_kwh:.1f} kWh/t", "Δ": f"{diff:.1f} kWh/t", "€ / t": f"{gain:.2f}"})
+
+    if p50_e is not None and len(elec_pt.dropna()) > 0:
+        # elektrot hedef: median - 0.05 kg/t (demo)
+        real_avg_e = float(elec_pt.dropna().mean())
+        target_e = max(0.0, float(p50_e) - 0.05)
+        diff_e = max(0.0, real_avg_e - target_e)
+        gain_e = diff_e * ELECTRODE_PRICE_EUR_PER_KG
+        total_gain_eur_per_t += gain_e
+        fin_rows.append({"Kalem": "Elektrot", "Mevcut": f"{real_avg_e:.3f} kg/t", "Hedef": f"{target_e:.3f} kg/t", "Δ": f"{diff_e:.3f} kg/t", "€ / t": f"{gain_e:.2f}"})
+
+    # Üst KPI kartları
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Batch (seçili dönem)", f"{len(dfp)}")
+    c2.metric("kWh/t (p10 / p50 / p90)", f"{p10_kwh:.1f} / {p50_kwh:.1f} / {p90_kwh:.1f}" if p10_kwh is not None else "-")
+    c3.metric("Elektrot kg/t (p10 / p50 / p90)", f"{p10_e:.3f} / {p50_e:.3f} / {p90_e:.3f}" if p10_e is not None else "-")
+    c4.metric("Hedef dışı batch sayısı", f"{outlier_cnt}" if target_kwh is not None else "-")
+
+    st.markdown("### 📈 Trend (kWh/t) + Hedef Bandı")
+    # Trend chart: kWh/t
+    chart_df = dfp[["timestamp_dt", "kwh_per_t"]].dropna().copy()
+    if chart_df.empty:
+        st.info("Trend için yeterli kWh/t yok.")
+    else:
+        base = alt.Chart(chart_df).mark_line().encode(
+            x=alt.X("timestamp_dt:T", title="Zaman"),
+            y=alt.Y("kwh_per_t:Q", title="kWh/t"),
+            tooltip=["timestamp_dt:T", "kwh_per_t:Q"],
+        ).properties(height=320)
+
+        layers = [base]
+
+        if target_kwh is not None:
+            tgt_df = pd.DataFrame({"timestamp_dt": [chart_df["timestamp_dt"].min(), chart_df["timestamp_dt"].max()], "target": [target_kwh, target_kwh]})
+            tgt = alt.Chart(tgt_df).mark_rule(strokeDash=[6, 4]).encode(
+                x="timestamp_dt:T",
+                y=alt.Y("target:Q"),
+                tooltip=[alt.Tooltip("target:Q", title="Hedef kWh/t")],
+            )
+            layers.append(tgt)
+
+        st.altair_chart(alt.layer(*layers).interactive(), use_container_width=True)
+
+    st.markdown("### 🧪 Kalite/Proses Dağılımı (Demo Bandları)")
+    # Tap temp dağılımı + duration
+    d1, d2 = st.columns(2)
+    with d1:
+        if tap.dropna().empty:
+            st.info("Tap T yok.")
+        else:
+            tap_df = dfp[["timestamp_dt", "tap_temp_c"]].dropna()
+            st.altair_chart(
+                alt.Chart(tap_df).mark_line().encode(x="timestamp_dt:T", y="tap_temp_c:Q", tooltip=["timestamp_dt:T", "tap_temp_c:Q"]).properties(height=260),
+                use_container_width=True
+            )
+    with d2:
+        if dur.dropna().empty:
+            st.info("Süre yok.")
+        else:
+            dur_df = dfp[["timestamp_dt", "duration_min"]].dropna()
+            st.altair_chart(
+                alt.Chart(dur_df).mark_line().encode(x="timestamp_dt:T", y="duration_min:Q", tooltip=["timestamp_dt:T", "duration_min:Q"]).properties(height=260),
+                use_container_width=True
+            )
+
+    st.markdown("### 💰 Finansal Özet (€/t)")
+    if fin_rows:
+        st.table(pd.DataFrame(fin_rows))
+        st.markdown(f"**Toplam potansiyel (demo hesap – €/t):** ≈ **{total_gain_eur_per_t:,.2f} €/t**")
+    else:
+        st.info("Finansal hesap için yeterli veri yok (kWh/t ve/veya elektrot kg/t).")
+
+    st.markdown("### ✅ Yönetim İçin 3 Cümlelik Özet")
+    # Kısa anlatı (otomatik)
+    lines = []
+    if target_kwh is not None and len(kwh) > 0:
+        lines.append(f"- Seçili dönemde ortalama **{kwh.mean():.1f} kWh/t**, hedef bandı **{target_kwh:.1f} kWh/t** (demo hedef).")
+    if outlier_cnt:
+        lines.append(f"- **{outlier_cnt} batch** hedef bandının üstünde; odak bu batch’leri stabil band içine almak.")
+    if fin_rows:
+        lines.append(f"- Ölçülebilir potansiyel **≈ {total_gain_eur_per_t:,.2f} €/t** (enerji+elektrot).")
+    if not lines:
+        lines = ["- Veri arttıkça KPI+finans özetleri daha stabil hale gelecek."]
+    for l in lines:
+        st.markdown(l)
+
+
+# ----------------------------------------------
+# OPERATIONS DASHBOARD (Mühendis/Operatör)
+# ----------------------------------------------
+def show_operations_dashboard(sim_mode: bool):
+    st.markdown("## Operations Dashboard – İzlenen Parametreler ve Stabilite")
+    if sim_mode:
+        st.info("🧪 Demo/Simülasyon datası gösteriliyor.")
+
+    data_source = get_data_source(sim_mode)
+    if not data_source:
+        st.info("Önce veri ekleyin (2. Canlı Veri) veya Simülasyon Modu açın.")
+        return
+
+    df = build_df(data_source)
+    if df.empty:
+        st.info("Veri boş.")
+        return
+
+    with st.expander("🎯 İzlenen Parametreler / Karar Değişkenleri", expanded=False):
+        st.markdown(
+            "- **İzlenen parametreler:** kWh/t, elektrot, Tap T, O₂ debisi, Slag foaming, Panel ΔT, süre\n"
+            "- **Karar değişkenleri (demo):** güç profili, O₂ stratejisi, köpük hedefi, bekleme/hold, ark stabilitesi\n"
+            "- Bu sayfa **iyi/kötü** etiketlemez; **trend + dağılım + sapma** gösterir."
+        )
+
+    # KPI stats
+    kwh = df["kwh_per_t"].dropna()
+    elec_pt = (df["electrode_kg_per_heat"] / df["tap_weight_t"]).replace([np.inf, -np.inf], np.nan).dropna()
+    tap = df["tap_temp_c"].dropna()
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Batch", f"{len(df)}")
+    c2.metric("kWh/t (ort ± std)", f"{kwh.mean():.1f} ± {kwh.std():.1f}" if len(kwh) else "-")
+    c3.metric("Elektrot kg/t (ort ± std)", f"{elec_pt.mean():.3f} ± {elec_pt.std():.3f}" if len(elec_pt) else "-")
+    c4.metric("Tap T (ort ± std)", f"{tap.mean():.0f} ± {tap.std():.0f}" if len(tap) else "-")
+
+    st.markdown("### 📈 Trendler")
+    # Multi-line trend: kWh/t, Tap T, electrode kg/heat (not per ton)
+    trend_cols = ["kwh_per_t", "tap_temp_c", "electrode_kg_per_heat", "o2_flow_nm3h", "slag_foaming_index", "panel_delta_t_c"]
+    exist = [c for c in trend_cols if c in df.columns]
+    plot_df = df[["timestamp_dt"] + exist].copy()
+    long = plot_df.melt("timestamp_dt", var_name="var", value_name="val").dropna()
+
+    if long.empty:
+        st.info("Trend için veri yok.")
+    else:
+        var_map = {
+            "kwh_per_t": "kWh/t",
+            "tap_temp_c": "Tap T (°C)",
+            "electrode_kg_per_heat": "Elektrot (kg/şarj)",
+            "o2_flow_nm3h": "O₂ (Nm³/h)",
+            "slag_foaming_index": "Slag foaming",
+            "panel_delta_t_c": "Panel ΔT (°C)",
+        }
+        long["var_name"] = long["var"].map(var_map).fillna(long["var"])
+
+        chart = alt.Chart(long).mark_line().encode(
+            x=alt.X("timestamp_dt:T", title="Zaman"),
+            y=alt.Y("val:Q", title=None),
+            color=alt.Color("var_name:N", title="Değişken", legend=alt.Legend(orient="top")),
+            tooltip=["timestamp_dt:T", "var_name:N", "val:Q"],
+        ).properties(height=380)
+        st.altair_chart(chart.interactive(), use_container_width=True)
+
+    st.markdown("### 🧾 Batch Seç – Özet")
+    # Batch selection for drill-down
+    ids = df["heat_id"].astype(str).tolist()
+    default_idx = max(0, len(ids) - 1)
+    selected = st.selectbox("Batch / Heat seç", ids, index=default_idx)
+
+    row = df[df["heat_id"].astype(str) == str(selected)].tail(1)
+    if row.empty:
+        st.info("Batch bulunamadı.")
+        return
+
+    r = row.iloc[0]
+    s1, s2, s3 = st.columns(3)
+    s1.metric("kWh/t", f"{r.get('kwh_per_t', np.nan):.1f}" if pd.notna(r.get("kwh_per_t")) else "-")
+    s2.metric("Tap T (°C)", f"{r.get('tap_temp_c', np.nan):.0f}" if pd.notna(r.get("tap_temp_c")) else "-")
+    s3.metric("Elektrot (kg/şarj)", f"{r.get('electrode_kg_per_heat', np.nan):.2f}" if pd.notna(r.get("electrode_kg_per_heat")) else "-")
+
+    st.markdown("**Operatör Notu:** " + (str(r.get("operator_note", "")) if pd.notna(r.get("operator_note")) else "-"))
+
+    # Minimal “yorum” (etiketlemeden)
+    st.markdown("### 🔎 Kısa Teknik Not (etiketsiz)")
+    notes = []
+    if pd.notna(r.get("panel_delta_t_c")) and float(r["panel_delta_t_c"]) > 25:
+        notes.append("- Panel ΔT yüksek; soğutma devresi/hat kısıtları kontrol edilebilir.")
+    if pd.notna(r.get("slag_foaming_index")) and float(r["slag_foaming_index"]) >= 9:
+        notes.append("- Köpük seviyesi üst bantta; karbon/O₂ dengesi gözlenebilir.")
+    if not notes:
+        notes.append("- Bu batch için belirgin “üst bant” sinyali yok (demo kriter).")
+    for n in notes:
+        st.markdown(n)
+
+
+# ----------------------------------------------
+# BATCH INSIGHTS (Batch list + dağılım)
+# ----------------------------------------------
+def show_batch_insights(sim_mode: bool):
+    st.markdown("## Batch Insights – Liste + Dağılım + Drill-down")
+    if sim_mode:
+        st.info("🧪 Demo/Simülasyon datası gösteriliyor.")
+
+    data_source = get_data_source(sim_mode)
+    if not data_source:
+        st.info("Önce veri ekleyin (2. Canlı Veri) veya Simülasyon Modu açın.")
+        return
+
+    df = build_df(data_source)
+    if df.empty:
+        st.info("Veri boş.")
+        return
+
+    # Derived columns
+    df = df.copy()
+    df["electrode_kg_per_t"] = (df["electrode_kg_per_heat"] / df["tap_weight_t"]).replace([np.inf, -np.inf], np.nan)
+
+    st.markdown("### 📋 Batch Listesi")
+    cols = ["timestamp_dt", "heat_id", "tap_weight_t", "kwh_per_t", "electrode_kg_per_t", "tap_temp_c", "duration_min", "o2_flow_nm3h", "slag_foaming_index", "panel_delta_t_c"]
+    show_cols = [c for c in cols if c in df.columns]
+    view = df[show_cols].rename(columns={
+        "timestamp_dt": "Zaman",
+        "heat_id": "Heat ID",
+        "tap_weight_t": "Tap (t)",
+        "kwh_per_t": "kWh/t",
+        "electrode_kg_per_t": "Elektrot (kg/t)",
+        "tap_temp_c": "Tap T (°C)",
+        "duration_min": "Süre (dk)",
+        "o2_flow_nm3h": "O₂ (Nm³/h)",
+        "slag_foaming_index": "Foaming",
+        "panel_delta_t_c": "Panel ΔT (°C)",
+    })
+
+    st.dataframe(view, use_container_width=True)
+
+    st.markdown("### 🔵 Dağılım Analizi (Scatter)")
+    c1, c2 = st.columns(2)
+    with c1:
+        if df["kwh_per_t"].notna().sum() > 5 and df["slag_foaming_index"].notna().sum() > 5:
+            sc = alt.Chart(df.dropna(subset=["kwh_per_t", "slag_foaming_index"])).mark_circle(size=60).encode(
+                x=alt.X("slag_foaming_index:Q", title="Slag foaming"),
+                y=alt.Y("kwh_per_t:Q", title="kWh/t"),
+                tooltip=["heat_id:N", "timestamp_dt:T", "kwh_per_t:Q", "slag_foaming_index:Q"]
+            ).properties(height=300)
+            st.altair_chart(sc.interactive(), use_container_width=True)
+        else:
+            st.info("kWh/t ve foaming için yeterli veri yok.")
+    with c2:
+        if df["electrode_kg_per_t"].notna().sum() > 5 and df["panel_delta_t_c"].notna().sum() > 5:
+            sc2 = alt.Chart(df.dropna(subset=["electrode_kg_per_t", "panel_delta_t_c"])).mark_circle(size=60).encode(
+                x=alt.X("panel_delta_t_c:Q", title="Panel ΔT (°C)"),
+                y=alt.Y("electrode_kg_per_t:Q", title="Elektrot (kg/t)"),
+                tooltip=["heat_id:N", "timestamp_dt:T", "electrode_kg_per_t:Q", "panel_delta_t_c:Q"]
+            ).properties(height=300)
+            st.altair_chart(sc2.interactive(), use_container_width=True)
+        else:
+            st.info("Elektrot kg/t ve Panel ΔT için yeterli veri yok.")
+
+    st.markdown("### 🧾 Batch Drill-down")
+    ids = df["heat_id"].astype(str).tolist()
+    default_idx = max(0, len(ids) - 1)
+    selected = st.selectbox("Detay için batch seç", ids, index=default_idx, key="batch_insights_pick")
+    r = df[df["heat_id"].astype(str) == str(selected)].tail(1).iloc[0]
+    detail = {
+        "Zaman": r.get("timestamp_dt"),
+        "Heat ID": r.get("heat_id"),
+        "Tap (t)": r.get("tap_weight_t"),
+        "kWh/t": r.get("kwh_per_t"),
+        "Enerji (kWh)": r.get("energy_kwh"),
+        "Süre (dk)": r.get("duration_min"),
+        "Tap T (°C)": r.get("tap_temp_c"),
+        "O₂ (Nm³/h)": r.get("o2_flow_nm3h"),
+        "Foaming": r.get("slag_foaming_index"),
+        "Panel ΔT (°C)": r.get("panel_delta_t_c"),
+        "Elektrot (kg/şarj)": r.get("electrode_kg_per_heat"),
+        "Elektrot (kg/t)": r.get("electrode_kg_per_t"),
+        "Not": r.get("operator_note", ""),
+    }
+    st.json({k: (None if (isinstance(v, float) and np.isnan(v)) else v) for k, v in detail.items()})
+
+
+# ----------------------------------------------
+# LAB / SIMULATION (Adhoc + akış kontrol)
+# ----------------------------------------------
+def show_lab_simulation(sim_mode: bool):
+    st.markdown("## Lab – Simülasyon / Adhoc Analiz (İleri Seviye)")
+    st.caption("Bu sayfa demo/Ar-Ge amaçlıdır. Yönetim ekranı değildir.")
+
+    if not sim_mode:
+        st.warning("Lab için Simülasyon Modu’nu aç.")
+        return
+
+    ensure_simulation_data_initialized()
+
+    st.markdown("### 🔄 Veri Akışı Kontrolü")
+    batch = st.slider(
+        "Akış hızı (şarj / adım)",
+        min_value=1,
+        max_value=500,
+        value=int(SIM_STREAM_BATCH_DEFAULT),
+        step=1,
+        key="lab_batch_slider",
+    )
+
+    c1, c2, c3 = st.columns([1.3, 1.0, 1.0])
+    with c1:
+        st.toggle(
+            "9000 şarjı zamanla oku",
+            key="sim_stream_enabled",
+            help="Açıkken 1000 historical sonrası kalan veriyi batch ile ekleyerek akışı simüle eder.",
+        )
+    with c2:
+        st.toggle(
+            "Otomatik ilerlet",
+            key="sim_stream_autostep",
+            help="Açıkken sayfa yenilendiğinde bir kez batch kadar ilerler.",
+        )
+    with c3:
+        st.toggle(
+            "Auto-refresh",
+            key="sim_stream_autorefresh",
+            help="Açıkken otomatik yenileme yapar; 'zamanla oku' gerçekten akar.",
+        )
+
+    st.number_input(
+        "Auto-refresh (sn)",
+        min_value=1,
+        max_value=30,
+        value=int(st.session_state.sim_stream_refresh_sec),
+        step=1,
+        key="sim_stream_refresh_sec",
+        help="Zamanla akışın hızı. 2-3 sn demo için iyi.",
+    )
+
+    b1, b2, b3 = st.columns([1.0, 1.0, 2.0])
+    with b1:
+        if st.button("▶️ İlerlet (1 adım)"):
+            advanced = advance_sim_stream(batch)
+            if not advanced:
+                st.info("Akış tamamlandı: 10.000 / 10.000")
+            st.rerun()
+    with b2:
+        if st.button("⟲ Reset (1000’e dön)"):
+            ensure_simulation_data_initialized(force_reset=True)
+            st.rerun()
+    with b3:
+        st.caption(f"Akış ilerleme: {int(st.session_state.sim_stream_progress)} / {SIM_STREAM_TOTAL}")
+
+    # ✅ gerçek “zamanla akış” (autorefresh)
+    if st.session_state.sim_stream_enabled and st.session_state.sim_stream_autostep:
+        if st.session_state.sim_stream_autorefresh:
+            st.autorefresh(interval=int(st.session_state.sim_stream_refresh_sec) * 1000, key="lab_autorefresh_tick")
+
+        cur = int(st.session_state.sim_stream_progress)
+        # aynı progress’te üst üste adım atmasın
+        if st.session_state.sim_stream_last_step_progress != cur:
+            st.session_state.sim_stream_last_step_progress = cur
+            advance_sim_stream(batch)
+
+    st.markdown("### 🧪 Adhoc Görünüm")
+    df = build_df(st.session_state.sim_data or [])
+    if df.empty:
+        st.info("Simülasyon datası yok.")
+        return
+
+    st.dataframe(df.tail(50), use_container_width=True)
+
+
+# ----------------------------------------------
+# ARC OPTIMIZER (Legacy/PoC sayfa - istersen kaldır)
+# ----------------------------------------------
+def show_arc_optimizer_page(sim_mode: bool):
+    st.markdown("## 3. Arc Optimizer (PoC) – Trendler, KPI ve Öneriler")
+    st.caption("Not: Demo yorumlarına göre artık ana ekranlar Executive/Operations/Batch/Lab olarak ayrıldı.")
+    if sim_mode:
+        st.info("🧪 **Simülasyon Modu Aktif.**")
+
+    data_source = get_data_source(sim_mode)
+    if not data_source:
+        st.info("Önce 2. sayfadan veri ekleyin veya Simülasyon Modu açın.")
+        return
+
+    df = build_df(data_source)
+    if df.empty:
+        st.info("Veri boş.")
+        return
 
     last = df.iloc[-1]
     last_n = df.tail(10)
@@ -565,147 +1032,33 @@ def show_arc_optimizer_page(sim_mode: bool):
     avg_electrode = last_n["electrode_kg_per_heat"].dropna().mean()
     avg_tap_temp = last_n["tap_temp_c"].dropna().mean()
 
-    # KPI trend farkı
-    if len(df) >= 10 and df["kwh_per_t"].notna().sum() >= 10:
-        first5 = df["kwh_per_t"].dropna().head(5).mean()
-        last5 = df["kwh_per_t"].dropna().tail(5).mean()
-        saving_potential = max(0.0, first5 - last5)
-    else:
-        saving_potential = 0.0
-
     # Üst satır: sol KPI'lar, sağ model kutusu
     kpi_col, model_col = st.columns([3, 2])
 
-    # -------------------------
-    # SOL KOLON (KPI + Operasyon Paneli)
-    # -------------------------
     with kpi_col:
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Son Şarj kWh/t", f"{last['kwh_per_t']:.1f}" if pd.notna(last.get("kwh_per_t")) else "-")
-        c2.metric(
-            "Son Şarj Elektrot",
-            f"{last['electrode_kg_per_heat']:.2f} kg/şarj" if pd.notna(last.get("electrode_kg_per_heat")) else "-",
-        )
+        c2.metric("Son Şarj Elektrot", f"{last['electrode_kg_per_heat']:.2f} kg/şarj" if pd.notna(last.get("electrode_kg_per_heat")) else "-")
         c3.metric("Son Tap Sıcaklığı", f"{last['tap_temp_c']:.0f} °C" if pd.notna(last.get("tap_temp_c")) else "-")
         c4.metric("Son 10 Şarj Ort. kWh/t", f"{avg_kwh_t:.1f}" if avg_kwh_t and not pd.isna(avg_kwh_t) else "-")
 
-        st.markdown("### 🎛️ Operasyon Paneli")
-
-        # ✅ Mini trend kaldırıldı → yerine 3 satır özet tablo
-        st.markdown("#### 🧠 AI Karşılaştırma Özeti")
-
-        valid = df.dropna(subset=["kwh_per_t", "electrode_kg_per_heat", "tap_temp_c"]).copy()
-        if len(valid) < 3:
-            st.info("Bu özet tablo için en az 3 dolu şarj kaydı gerekir (kWh/t, elektrot, Tap T).")
-        else:
-            worst3 = valid.nlargest(3, "kwh_per_t")
-            best3 = valid.nsmallest(3, "kwh_per_t")
-            last3 = valid.tail(3)
-
-            def _row(subdf):
-                return (
-                    float(subdf["kwh_per_t"].mean()),
-                    float(subdf["electrode_kg_per_heat"].mean()),
-                    float(subdf["tap_temp_c"].mean()),
-                )
-
-            w_kwh, w_elec, w_tap = _row(worst3)
-            l_kwh, l_elec, l_tap = _row(last3)
-            b_kwh, b_elec, b_tap = _row(best3)
-
-            ref_kwh = float(last_n["kwh_per_t"].dropna().mean()) if last_n["kwh_per_t"].notna().sum() >= 3 else float(valid["kwh_per_t"].mean())
-            ref_elec = float(last_n["electrode_kg_per_heat"].dropna().mean()) if last_n["electrode_kg_per_heat"].notna().sum() >= 3 else float(valid["electrode_kg_per_heat"].mean())
-
-            def _comment(kwh, elec, ref_kwh_, ref_elec_):
-                if (kwh > ref_kwh_ * 1.05) and (elec > ref_elec_ * 1.05):
-                    return "Enerji & elektrot kaçıyor"
-                if kwh < ref_kwh_ * 0.98:
-                    return "AI hedef bölgesi"
-                return "Ortalama"
-
-            summary_df = pd.DataFrame(
-                [
-                    {
-                        "Grup": "En kötü 3",
-                        "kWh/t": round(w_kwh, 1),
-                        "Elektrot (kg/şarj)": round(w_elec, 2),
-                        "Tap T (°C)": int(round(w_tap, 0)),
-                        "Yorum": _comment(w_kwh, w_elec, ref_kwh, ref_elec),
-                    },
-                    {
-                        "Grup": "Son 3",
-                        "kWh/t": round(l_kwh, 1),
-                        "Elektrot (kg/şarj)": round(l_elec, 2),
-                        "Tap T (°C)": int(round(l_tap, 0)),
-                        "Yorum": "Ortalama",
-                    },
-                    {
-                        "Grup": "En iyi 3",
-                        "kWh/t": round(b_kwh, 1),
-                        "Elektrot (kg/şarj)": round(b_elec, 2),
-                        "Tap T (°C)": int(round(b_tap, 0)),
-                        "Yorum": _comment(b_kwh, b_elec, ref_kwh, ref_elec),
-                    },
-                ]
-            )
-            st.table(summary_df)
-
-        # 2) Alarm bandı
-        st.markdown("#### 🚨 Proses Durumu / Alarmlar")
+        st.markdown("### 🚨 Proses Durumu (Band yaklaşımı)")
         alarms = []
-
-        if avg_kwh_t and pd.notna(last.get("kwh_per_t")):
-            if last["kwh_per_t"] > avg_kwh_t * 1.05:
-                alarms.append("⚡ kWh/t son 10 ortalamasına göre yüksek")
-
-        if avg_tap_temp and pd.notna(last.get("tap_temp_c")):
-            if abs(last["tap_temp_c"] - avg_tap_temp) > 15:
-                alarms.append("🔥 Tap sıcaklığı sapması > 15°C")
-
-        if pd.notna(last.get("panel_delta_t_c")):
-            if last["panel_delta_t_c"] > 25:
-                alarms.append("💧 Panel ΔT yüksek (>25°C)")
-
-        if last.get("slag_foaming_index") is not None:
-            if float(last["slag_foaming_index"]) >= 9:
-                alarms.append("🌋 Slag foaming aşırı (≥9)")
+        if avg_kwh_t and pd.notna(last.get("kwh_per_t")) and last["kwh_per_t"] > avg_kwh_t * 1.05:
+            alarms.append("⚡ kWh/t son 10 ortalamasına göre üst bantta")
+        if avg_tap_temp and pd.notna(last.get("tap_temp_c")) and abs(last["tap_temp_c"] - avg_tap_temp) > 15:
+            alarms.append("🔥 Tap sıcaklığı sapması > 15°C")
+        if pd.notna(last.get("panel_delta_t_c")) and last["panel_delta_t_c"] > 25:
+            alarms.append("💧 Panel ΔT üst bantta (>25°C)")
+        if last.get("slag_foaming_index") is not None and float(last["slag_foaming_index"]) >= 9:
+            alarms.append("🌋 Slag foaming üst bantta (≥9)")
 
         if alarms:
             for a in alarms:
                 st.warning(a)
         else:
-            st.success("✅ Proses stabil – belirgin alarm yok")
+            st.success("✅ Belirgin üst bant sinyali yok (demo)")
 
-        # 3) En iyi 10 vs Son 10 (istersen kaldırılabilir)
-        st.markdown("#### 📊 En İyi 10 vs Son 10 Şarj Kıyas")
-        if df["kwh_per_t"].notna().sum() >= 20:
-            best10 = df.nsmallest(10, "kwh_per_t")
-            last10 = df.tail(10)
-
-            comp_rows = [
-                {
-                    "Gösterge": "kWh/t",
-                    "En İyi 10 Ort.": f"{best10['kwh_per_t'].mean():.1f}",
-                    "Son 10 Ort.": f"{last10['kwh_per_t'].mean():.1f}",
-                    "Δ (Son - En iyi)": f"{last10['kwh_per_t'].mean() - best10['kwh_per_t'].mean():+.1f}",
-                }
-            ]
-            if best10["electrode_kg_per_heat"].notna().sum() >= 5 and last10["electrode_kg_per_heat"].notna().sum() >= 5:
-                comp_rows.append(
-                    {
-                        "Gösterge": "Elektrot (kg/şarj)",
-                        "En İyi 10 Ort.": f"{best10['electrode_kg_per_heat'].mean():.2f}",
-                        "Son 10 Ort.": f"{last10['electrode_kg_per_heat'].mean():.2f}",
-                        "Δ (Son - En iyi)": f"{last10['electrode_kg_per_heat'].mean() - best10['electrode_kg_per_heat'].mean():+.2f}",
-                    }
-                )
-            st.table(pd.DataFrame(comp_rows))
-        else:
-            st.info("Kıyas için en az 20 şarj verisi gerekir.")
-
-    # -------------------------
-    # SAĞ KOLON (Model / Eğitim Modu)
-    # -------------------------
     with model_col:
         st.markdown("#### 🤖 AI Model / Eğitim Modu")
         train_mode = st.radio(
@@ -718,392 +1071,32 @@ def show_arc_optimizer_page(sim_mode: bool):
         current_rows = len(df)
         progress_ratio = min(current_rows / DIGITAL_TWIN_TARGET_HEATS, 1.0) if DIGITAL_TWIN_TARGET_HEATS else 0.0
 
-        st.caption(f"Veri ilerleme durumu: **{current_rows} / {DIGITAL_TWIN_TARGET_HEATS}** şarj")
+        st.caption(f"Veri ilerleme: **{current_rows} / {DIGITAL_TWIN_TARGET_HEATS}** şarj")
         st.progress(progress_ratio)
-        st.caption(f"Eğitim ilerlemesi: **%{progress_ratio*100:.1f}**")
 
         if train_mode == "Model Eğit":
-            st.caption("Bu buton, mevcut veri setiyle modeli bir kez eğitir (demo / PoC).")
-            st.caption(f"Mevcut veri sayısı: {current_rows} şarj (önerilen ≥ 20).")
             if st.button("Modeli Eğit", key="btn_train_manual"):
                 train_arc_model(df, note="(Model Eğit)", min_samples=20)
 
         elif train_mode == "Sürekli Eğit":
-            st.caption("Her sayfa yenilemesinde mevcut veriyle model güncellenir (demo modu).")
-            st.caption(f"Mevcut veri sayısı: {current_rows} şarj (önerilen ≥ 20).")
             train_arc_model(df, note="(Sürekli Eğit)", min_samples=20)
 
         elif train_mode == "Dijital İkiz Modu":
-            st.caption(
-                f"Dijital ikiz modu: {DIGITAL_TWIN_HISTORICAL_HEATS} şarj historical ile başlar, "
-                f"veri geldikçe {DIGITAL_TWIN_TARGET_HEATS} şarj hedefe kadar öğrenmeye devam eder."
-            )
-
             if current_rows < DIGITAL_TWIN_MIN_START:
-                st.warning(
-                    f"Dijital ikiz eğitimine başlamak için en az {DIGITAL_TWIN_MIN_START} şarj gerekiyor; "
-                    f"şu an {current_rows} var."
-                )
+                st.warning(f"Dijital ikiz için ≥ {DIGITAL_TWIN_MIN_START} şarj gerekli; şu an {current_rows}.")
             else:
                 if current_rows > int(st.session_state.model_last_trained_rows_marker):
                     train_arc_model(df, note="(Dijital İkiz Modu)", min_samples=DIGITAL_TWIN_MIN_START)
-
-                if current_rows < DIGITAL_TWIN_TARGET_HEATS:
-                    st.session_state.model_status = (
-                        f"Dijital ikiz öğrenme aşamasında "
-                        f"(%{progress_ratio*100:.1f} – {current_rows}/{DIGITAL_TWIN_TARGET_HEATS} şarj)"
-                    )
-                else:
-                    st.session_state.model_status = "Dijital ikiz hazır ✅ (10.000 şarj ile eğitildi)"
 
         st.write(f"**Durum:** {st.session_state.model_status}")
         if st.session_state.model_last_train_time:
             st.caption(
                 f"Son eğitim: {st.session_state.model_last_train_time} · "
-                f"Veri sayısı: {st.session_state.model_last_train_rows} şarj · "
+                f"Veri: {st.session_state.model_last_train_rows} · "
                 f"Toplam eğitim: {st.session_state.model_train_count}"
             )
         else:
             st.caption("Model henüz hiç eğitilmedi.")
-
-        model, feat_cols, target_cols = load_arc_model()
-
-        if train_mode == "Dijital İkiz Modu" and model is not None and feat_cols is not None and current_rows >= DIGITAL_TWIN_MIN_START:
-            st.markdown("#### Dijital İkiz – What-if Simülasyonu")
-
-            last_row_for_defaults = df.iloc[-1]
-
-            def num_input(name, col_name, min_v, max_v, step, fmt="%.1f"):
-                default_raw = last_row_for_defaults.get(col_name, (min_v + max_v) / 2)
-                try:
-                    default = float(default_raw)
-                except Exception:
-                    default = float((min_v + max_v) / 2)
-                default = max(min_v, min(default, max_v))
-                return st.number_input(
-                    name,
-                    min_value=min_v,
-                    max_value=max_v,
-                    value=float(default),
-                    step=step,
-                    format=fmt,
-                    key=f"dtwin_{col_name}",
-                )
-
-            c1, c2 = st.columns(2)
-            with c1:
-                tap_weight = num_input("Tap Weight (t)", "tap_weight_t", 20.0, 60.0, 0.5)
-                duration = num_input("Süre (dk)", "duration_min", 30.0, 90.0, 1.0, "%.0f")
-                energy = num_input("Enerji (kWh)", "energy_kwh", 500.0, 30000.0, 50.0)
-                o2_flow = num_input("O2 Debisi (Nm³/h)", "o2_flow_nm3h", 300.0, 3000.0, 10.0)
-            with c2:
-                slag = num_input("Slag Foaming (0–10)", "slag_foaming_index", 0.0, 10.0, 0.5)
-                panel_dT = num_input("Panel ΔT (°C)", "panel_delta_t_c", 0.0, 60.0, 0.5)
-                elec = num_input("Elektrot (kg/şarj)", "electrode_kg_per_heat", 0.5, 6.0, 0.05)
-
-            if st.button("Simülasyonu Çalıştır", key="btn_dtwin_sim"):
-                inp = {
-                    "tap_weight_t": tap_weight,
-                    "duration_min": duration,
-                    "energy_kwh": energy,
-                    "o2_flow_nm3h": o2_flow,
-                    "slag_foaming_index": slag,
-                    "panel_delta_t_c": panel_dT,
-                    "electrode_kg_per_heat": elec,
-                }
-
-                row_df = pd.DataFrame([inp])[feat_cols].fillna(0.0)
-                try:
-                    preds = model.predict(row_df)[0]
-                    pred_dict = dict(zip(target_cols, preds))
-                    kwh_pred = float(pred_dict.get("kwh_per_t", float("nan")))
-                    tap_pred = float(pred_dict.get("tap_temp_c", float("nan")))
-                    st.markdown("**AI Tahmin (Dijital İkiz):**")
-                    st.write(f"- kWh/t ≈ **{kwh_pred:.1f}**")
-                    st.write(f"- Tap T ≈ **{tap_pred:.0f} °C**")
-                except Exception as e:
-                    st.error(f"Tahmin hesaplanırken hata oluştu: {e}")
-
-    # ------------------------------------------
-    # ZAMAN TRENDi + TAHMİN (ZAMAN GÖRÜNÜR)
-    # ------------------------------------------
-    trend_df = df.set_index("timestamp_dt")[["kwh_per_t", "tap_temp_c", "electrode_kg_per_heat"]]
-    min_time = df["timestamp_dt"].min()
-    last_time = df["timestamp_dt"].max()
-    real_span = last_time - min_time
-    if pd.isna(real_span) or real_span.total_seconds() <= 0:
-        real_span = timedelta(hours=6)
-
-    future_span = real_span * 0.20
-
-    def _safe_base(val_avg, val_last, default):
-        if val_avg is not None and not pd.isna(val_avg):
-            return val_avg
-        if val_last is not None and not pd.isna(val_last):
-            return val_last
-        return default
-
-    base_tap_temp = _safe_base(avg_tap_temp, last.get("tap_temp_c"), 1600.0)
-    base_kwh_t = _safe_base(avg_kwh_t, last.get("kwh_per_t"), 420.0)
-    base_electrode = _safe_base(avg_electrode, last.get("electrode_kg_per_heat"), 2.0)
-
-    predicted_tap_temp_target = base_tap_temp + 5.0
-    predicted_kwh_t_target = base_kwh_t - 5.0
-    predicted_electrode_target = base_electrode
-
-    future_points = []
-    last_kwh = last.get("kwh_per_t", base_kwh_t)
-    last_tap_temp = last.get("tap_temp_c", base_tap_temp)
-    last_electrode = last.get("electrode_kg_per_heat", base_electrode)
-
-    for i in range(4):
-        frac = i / 3.0
-        t = last_time + future_span * frac
-        kwh_val = last_kwh + (predicted_kwh_t_target - last_kwh) * frac
-        tap_val = last_tap_temp + (predicted_tap_temp_target - last_tap_temp) * frac
-        el_val = last_electrode + (predicted_electrode_target - last_electrode) * frac
-        future_points.append({"timestamp_dt": t, "kwh_per_t": kwh_val, "tap_temp_c": tap_val, "electrode_kg_per_heat": el_val})
-
-    future_df = pd.DataFrame(future_points)
-    predicted_tap_time = future_points[-1]["timestamp_dt"]
-
-    actual_long = (
-        trend_df.reset_index()
-        .melt(
-            id_vars=["timestamp_dt"],
-            value_vars=["kwh_per_t", "tap_temp_c", "electrode_kg_per_heat"],
-            var_name="variable",
-            value_name="value",
-        )
-    )
-    actual_long["data_type"] = "Aktüel"
-
-    future_long = (
-        future_df.melt(
-            id_vars=["timestamp_dt"],
-            value_vars=["kwh_per_t", "tap_temp_c", "electrode_kg_per_heat"],
-            var_name="variable",
-            value_name="value",
-        )
-    )
-    future_long["data_type"] = "Potansiyel (AI)"
-
-    combined = pd.concat([actual_long, future_long], ignore_index=True)
-
-    var_map = {
-        "kwh_per_t": "kWh/t",
-        "tap_temp_c": "Tap T (°C)",
-        "electrode_kg_per_heat": "Elektrot (kg/şarj)",
-    }
-    combined["variable_name"] = combined["variable"].map(var_map)
-
-    domain_min = min_time
-    if predicted_tap_time > domain_min:
-        domain_max = domain_min + (predicted_tap_time - domain_min) / 0.9
-    else:
-        domain_max = domain_min + timedelta(hours=6)
-
-    st.markdown("### Proses Gidişatı – Zaman Trendi ve Tahmini Döküm Anı (AI)")
-
-    base_chart = (
-        alt.Chart(combined)
-        .mark_line(point=False)
-        .encode(
-            x=alt.X(
-                "timestamp_dt:T",
-                title="Zaman",
-                scale=alt.Scale(domain=[domain_min, domain_max]),
-                axis=alt.Axis(
-                    format="%d.%m %H:%M",
-                    tickCount=10,
-                    labelAngle=-35,
-                    labelFontSize=11,
-                    titleFontSize=13,
-                ),
-            ),
-            y=alt.Y("value:Q", title=None, axis=alt.Axis(labelFontSize=11, titleFontSize=13)),
-            color=alt.Color(
-                "variable_name:N",
-                title="Değişken",
-                legend=alt.Legend(orient="top", direction="horizontal", labelFontSize=11, titleFontSize=12),
-            ),
-            strokeDash=alt.StrokeDash(
-                "data_type:N",
-                title="Veri Tipi",
-                scale=alt.Scale(domain=["Aktüel", "Potansiyel (AI)"], range=[[1, 0], [6, 4]]),
-            ),
-        )
-        .properties(height=420, width="container")
-    )
-
-    tap_point_df = future_df[future_df["timestamp_dt"] == predicted_tap_time][["timestamp_dt", "tap_temp_c"]].copy()
-    tap_point_df.rename(columns={"tap_temp_c": "value"}, inplace=True)
-    tap_point_df["variable_name"] = "Tap T (°C)"
-
-    point_chart = (
-        alt.Chart(tap_point_df)
-        .mark_point(size=120, filled=True)
-        .encode(x="timestamp_dt:T", y="value:Q", color=alt.Color("variable_name:N", legend=None))
-    )
-
-    label_df = tap_point_df.copy()
-    label_df["label_top"] = label_df["timestamp_dt"].dt.strftime("Hedef Döküm Zamanı (AI): %Y-%m-%d %H:%M")
-    label_df["label_bottom"] = label_df["value"].map(lambda v: f"Sıcaklık: {v:.0f} °C")
-
-    label_top_chart = (
-        alt.Chart(label_df)
-        .mark_text(align="left", dx=35, dy=-35, fontSize=12, fontWeight="bold")
-        .encode(x="timestamp_dt:T", y="value:Q", text="label_top:N")
-    )
-    label_bottom_chart = (
-        alt.Chart(label_df)
-        .mark_text(align="left", dx=35, dy=-10, fontSize=11)
-        .encode(x="timestamp_dt:T", y="value:Q", text="label_bottom:N")
-    )
-
-    now_df = pd.DataFrame({"timestamp_dt": [last_time]})
-    now_rule = alt.Chart(now_df).mark_rule(strokeDash=[2, 2]).encode(x="timestamp_dt:T")
-
-    full_chart = (base_chart + point_chart + now_rule + label_top_chart + label_bottom_chart).properties(
-        padding={"right": 20, "left": 10, "top": 40, "bottom": 20}
-    )
-    st.altair_chart(full_chart.interactive(), use_container_width=True)
-
-    delta_min = (predicted_tap_time - last_time).total_seconds() / 60.0
-    st.markdown(
-        f"**Tahmini Döküm Anı (AI):** {predicted_tap_time.strftime('%Y-%m-%d %H:%M')} "
-        f"(yaklaşık {delta_min:.0f} dk sonra)"
-    )
-
-    # ------------------------------------------
-    # PROSES KAZANÇ ANALİZİ (Ton Başına)
-    # ------------------------------------------
-    st.markdown("### 💰 Proses Kazanç Analizi (Ton Başına)")
-
-    ENERGY_PRICE_EUR_PER_KWH = 0.12
-    ELECTRODE_PRICE_EUR_PER_KG = 3.0
-
-    rows = []
-    total_gain_per_t = 0.0
-
-    if pd.notna(last.get("kwh_per_t")) and avg_kwh_t and not pd.isna(avg_kwh_t):
-        real = float(last["kwh_per_t"])
-        target = max(avg_kwh_t - 5.0, 0.0)
-        diff = real - target
-        gain = abs(diff) * ENERGY_PRICE_EUR_PER_KWH
-        total_gain_per_t += gain
-        rows.append({"tag": "kwh_per_t", "deg": "Enerji tüketimi", "akt": f"{real:.1f} kWh/t", "pot": f"{target:.1f} kWh/t",
-                     "fark": f"{diff:+.1f} kWh/t", "kazanc": f"{gain:.2f} €/t", "type": "cost"})
-
-    if pd.notna(last.get("electrode_kg_per_heat")) and pd.notna(last.get("tap_weight_t")):
-        tap_w = float(last["tap_weight_t"]) or 0.0
-        if tap_w > 0:
-            real_pt = float(last["electrode_kg_per_heat"]) / tap_w
-            target_pt = (float(avg_electrode) / tap_w) if (avg_electrode and not pd.isna(avg_electrode)) else max(real_pt - 0.05, 0.0)
-            diff = real_pt - target_pt
-            gain = abs(diff) * ELECTRODE_PRICE_EUR_PER_KG
-            total_gain_per_t += gain
-            rows.append({"tag": "electrode", "deg": "Elektrot tüketimi", "akt": f"{real_pt:.3f} kg/t", "pot": f"{target_pt:.3f} kg/t",
-                         "fark": f"{diff:+.3f} kg/t", "kazanc": f"{gain:.2f} €/t", "type": "cost"})
-
-    if pd.notna(last.get("tap_temp_c")) and avg_tap_temp and not pd.isna(avg_tap_temp):
-        real = float(last["tap_temp_c"])
-        target = float(avg_tap_temp)
-        diff = real - target
-        rows.append({"tag": "tap_temp_c", "deg": "Tap sıcaklığı optimizasyonu", "akt": f"{real:.0f} °C", "pot": f"{target:.0f} °C",
-                     "fark": f"{diff:+.0f} °C", "kazanc": "0.03–0.10 €/t + Kalite ↑", "type": "mixed"})
-
-    if pd.notna(last.get("panel_delta_t_c")):
-        real = float(last["panel_delta_t_c"])
-        target = 20.0
-        diff = real - target
-        rows.append({"tag": "panel_delta_t", "deg": "Panel ΔT", "akt": f"{real:.1f} °C", "pot": f"{target:.1f} °C",
-                     "fark": f"{diff:+.1f} °C", "kazanc": "Kalite ↑", "type": "quality"})
-
-    slag_val = None
-    if last.get("slag_foaming_index") is not None:
-        slag_val = float(last["slag_foaming_index"])
-        target = 7.0
-        diff = slag_val - target
-        rows.append({"tag": "slag_foaming", "deg": "Köpük yüksekliği / slag foaming", "akt": f"{slag_val:.1f}", "pot": f"{target:.1f}",
-                     "fark": f"{diff:+.1f}", "kazanc": "Enerji verimliliği ↑, elektrot ve refrakter tüketimi ↓", "type": "quality"})
-
-    if pd.notna(last.get("tap_temp_c")) and pd.notna(last.get("panel_delta_t_c")):
-        t_act = float(last["tap_temp_c"])
-        dT_act = float(last["panel_delta_t_c"])
-        dt_from_avg = (t_act - float(avg_tap_temp)) if (avg_tap_temp and not pd.isna(avg_tap_temp)) else 0.0
-
-        if dt_from_avg > 20 or dT_act > 30:
-            refr_level = "Yüksek risk"
-        elif dt_from_avg > 10 or dT_act > 25:
-            refr_level = "Orta"
-        else:
-            refr_level = "Düşük"
-
-        rows.append({"tag": "refractory_wear", "deg": "Refrakter aşınma seviyesi", "akt": refr_level, "pot": "AI kontrollü optimum bölge",
-                     "fark": "-", "kazanc": "Refrakter ömrü ↑, planlı duruşlar dışında duruş ↓", "type": "quality"})
-
-    if (pd.notna(last.get("kwh_per_t")) and avg_kwh_t and not pd.isna(avg_kwh_t)
-        and pd.notna(last.get("tap_temp_c")) and avg_tap_temp and not pd.isna(avg_tap_temp)):
-        score = 0
-        if slag_val is not None and slag_val >= 7.0:
-            score += 1
-        if abs(float(last["kwh_per_t"]) - float(avg_kwh_t)) <= 10:
-            score += 1
-        if abs(float(last["tap_temp_c"]) - float(avg_tap_temp)) <= 10:
-            score += 1
-
-        mix_level = "İyi" if score == 3 else ("Orta" if score == 2 else "Riskli")
-        rows.append({"tag": "mix_quality", "deg": "Karışım kalitesi (homojenlik)", "akt": mix_level, "pot": "AI ile stabil ve homojen bölge",
-                     "fark": "-", "kazanc": "Kalite ↑, iç hurda ve yeniden işleme ↓", "type": "quality"})
-
-    widths = [1.0, 2.0, 1.3, 1.3, 1.1, 1.8, 0.5]
-    hcols = st.columns(widths)
-    hcols[0].markdown("**Tag**")
-    hcols[1].markdown("**Değişken**")
-    hcols[2].markdown("**Aktüel**")
-    hcols[3].markdown("**Potansiyel (AI)**")
-    hcols[4].markdown("**Fark**")
-    hcols[5].markdown("**Tahmini Kazanç**")
-    hcols[6].markdown("")
-
-    profit_state = st.session_state.profit_info_state
-    for row in rows:
-        cols = st.columns(widths)
-        cols[0].markdown(row["tag"])
-        cols[1].markdown(row["deg"])
-        cols[2].markdown(row["akt"])
-        cols[3].markdown(row["pot"])
-        cols[4].markdown(row["fark"])
-        cols[5].markdown(row["kazanc"])
-        btn_key = f"profit_info_btn_{row['tag']}"
-        if cols[6].button("ℹ️", key=btn_key):
-            profit_state[row["tag"]] = not profit_state.get(row["tag"], False)
-
-    st.markdown(
-        f"**Toplam Potansiyel Kazanç (AI tahmini, ton başına – doğrudan hesaplanabilen kalemler):** "
-        f"≈ **{total_gain_per_t:,.2f} €/t**"
-    )
-
-    st.markdown("### Model Önerileri (Örnek / Demo Mantık)")
-    suggestions = []
-
-    if pd.notna(last.get("kwh_per_t")) and avg_kwh_t and not pd.isna(avg_kwh_t) and last["kwh_per_t"] > avg_kwh_t * 1.05:
-        suggestions.append("🔌 Son şarjın **kWh/t** değeri son 10 şarj ortalamasına göre yüksek. O2 debisi ve güç profilini gözden geçirin.")
-    if pd.notna(last.get("electrode_kg_per_heat")) and avg_electrode and not pd.isna(avg_electrode) and last["electrode_kg_per_heat"] > avg_electrode * 1.10:
-        suggestions.append("🧯 **Elektrot tüketimi** son şarjda yükselmiş. Ark stabilitesini (voltage/arc length) kontrol edin.")
-    if pd.notna(last.get("tap_temp_c")) and avg_tap_temp and not pd.isna(avg_tap_temp) and last["tap_temp_c"] < avg_tap_temp - 10:
-        suggestions.append("🔥 Tap sıcaklığı son şarjda düşük. Enerji girişini hafif artırma veya şarj sonu bekleme süresini optimize etmeyi düşünün.")
-    if last.get("slag_foaming_index") is not None and float(last["slag_foaming_index"]) >= 8:
-        suggestions.append("🌋 Slag foaming seviyesi yüksek (≥8). Karbon/O₂ dengesini ve köpük kontrolünü gözden geçirin.")
-    if last.get("panel_delta_t_c") is not None and float(last["panel_delta_t_c"]) > 25:
-        suggestions.append("💧 Panel ΔT yüksek. Soğutma devresi dengesiz olabilir; debileri ve tıkalı hatları kontrol edin.")
-    if saving_potential > 0.0:
-        suggestions.append(f"📉 kWh/t trendine göre yaklaşık **{saving_potential:.1f} kWh/t** iyileştirme potansiyeli görülüyor.")
-    if not suggestions:
-        suggestions.append("✅ Belirgin anomali/iyileştirme alarmı yok. Mevcut ayarlar stabil görünüyor.")
-    for s in suggestions:
-        st.markdown(f"- {s}")
 
 
 # ----------------------------------------------
@@ -1121,63 +1114,39 @@ def main():
 
         if sim_mode:
             ensure_simulation_data_initialized()
-
-            st.markdown("### 🔄 Veri Akışı")
-            batch = st.slider(
-                "Akış hızı (şarj / yenileme)",
-                min_value=1,
-                max_value=500,
-                value=SIM_STREAM_BATCH_DEFAULT,
-                step=1,
-            )
-
-            c1, c2 = st.columns([2, 1])
-            with c1:
-                # ✅ key ile kontrol (default True session_state'ten geliyor)
-                st.toggle(
-                    "9000 şarjı zamanla oku",
-                    key="sim_stream_enabled",
-                    help="Açıkken 1000 historical sonrası kalan veriyi batch ile ekleyerek akışı simüle eder.",
-                )
-            with c2:
-                if st.button("▶️ İlerlet"):
-                    advanced = advance_sim_stream(batch)
-                    if not advanced:
-                        st.info("Akış tamamlandı: 10.000 / 10.000")
-                    st.rerun()
-
-            # ✅ key ile kontrol (default True session_state'ten geliyor)
-            st.toggle(
-                "Otomatik ilerlet",
-                key="sim_stream_autostep",
-                help="Sayfa her render olduğunda bir kez batch kadar ilerletir (autorefresh yok).",
-            )
-
-            # ✅ Autostep: aynı progress’te 2 kere çalışmasın
-            if st.session_state.sim_stream_enabled and st.session_state.sim_stream_autostep:
-                cur = int(st.session_state.sim_stream_progress)
-                if st.session_state.sim_stream_last_step_progress != cur:
-                    st.session_state.sim_stream_last_step_progress = cur
-                    advance_sim_stream(batch)
-
-            st.caption(f"Akış ilerleme: {int(st.session_state.sim_stream_progress)} / {SIM_STREAM_TOTAL}")
-
+            st.caption(f"Sim ilerleme: {int(st.session_state.sim_stream_progress)} / {SIM_STREAM_TOTAL}")
         else:
             st.session_state.sim_data = None
 
-        # ✅ Arc Optimizer default seçili
+        st.markdown("---")
         page = st.radio(
             "Sayfa Seç",
-            ["1. Setup", "2. Canlı Veri", "3. Arc Optimizer"],
-            index=2,
+            [
+                "Executive Dashboard",
+                "Operations Dashboard",
+                "Batch Insights",
+                "Lab (Simulation)",
+                "1. Setup",
+                "2. Canlı Veri",
+                "3. Arc Optimizer (PoC)",
+            ],
+            index=0,
         )
 
     if page == "1. Setup":
         show_setup_form()
     elif page == "2. Canlı Veri":
         show_runtime_page(sim_mode)
-    else:
+    elif page == "3. Arc Optimizer (PoC)":
         show_arc_optimizer_page(sim_mode)
+    elif page == "Executive Dashboard":
+        show_executive_dashboard(sim_mode)
+    elif page == "Operations Dashboard":
+        show_operations_dashboard(sim_mode)
+    elif page == "Batch Insights":
+        show_batch_insights(sim_mode)
+    else:
+        show_lab_simulation(sim_mode)
 
 
 if __name__ == "__main__":
