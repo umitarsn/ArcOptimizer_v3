@@ -28,7 +28,6 @@ st.markdown(
     <style>
     section[data-testid="stSidebar"] { width: 340px !important; }
     section[data-testid="stSidebar"] > div { width: 340px !important; }
-
     .block-container { padding-top: 1.2rem; padding-bottom: 2.0rem; }
     </style>
     """,
@@ -63,7 +62,7 @@ def _init_state():
         "profit_info_state": {},
         "sim_data": None,
         "sim_full_data": None,
-        # sim akış
+        # sim akış state
         "sim_stream_enabled": True,
         "sim_stream_autostep": True,
         "sim_stream_progress": DIGITAL_TWIN_HISTORICAL_HEATS,
@@ -87,6 +86,56 @@ def _init_state():
 
 
 _init_state()
+
+
+# =========================================================
+# WIDGET BIND HELPERS (duplicate key fix)
+# - Aynı state'i iki farklı widget ile yönetmek için
+#   widget key'lerini benzersiz tutup state'i senkronluyoruz.
+# =========================================================
+def bind_toggle(label: str, state_key: str, widget_key: str, help_text: str | None = None):
+    def _sync():
+        st.session_state[state_key] = st.session_state[widget_key]
+
+    return st.toggle(
+        label,
+        value=bool(st.session_state.get(state_key, False)),
+        key=widget_key,
+        help=help_text,
+        on_change=_sync,
+    )
+
+
+def bind_slider_int(label: str, state_key: str, widget_key: str, min_v: int, max_v: int, step: int = 1, help_text: str | None = None):
+    def _sync():
+        st.session_state[state_key] = int(st.session_state[widget_key])
+
+    return st.slider(
+        label,
+        min_value=min_v,
+        max_value=max_v,
+        value=int(st.session_state.get(state_key, min_v)),
+        step=step,
+        key=widget_key,
+        help=help_text,
+        on_change=_sync,
+    )
+
+
+def bind_number_int(label: str, state_key: str, widget_key: str, min_v: int, max_v: int, step: int = 1, help_text: str | None = None):
+    def _sync():
+        st.session_state[state_key] = int(st.session_state[widget_key])
+
+    return st.number_input(
+        label,
+        min_value=min_v,
+        max_value=max_v,
+        value=int(st.session_state.get(state_key, min_v)),
+        step=step,
+        key=widget_key,
+        help=help_text,
+        on_change=_sync,
+    )
 
 
 # =========================================================
@@ -154,7 +203,6 @@ def _make_heat_row(ts: datetime, idx: int):
         "electrode_kg_per_heat": float(electrode_cons),
         "kwh_per_t": float(kwh_per_t),
         "operator_note": "Simülasyon kaydı",
-        # persona raporları için basit alanlar:
         "grade": random.choice(["A", "B", "C"]),
         "ems_on": random.choice([0, 1]),
     }
@@ -362,34 +410,29 @@ def kpi_pack(df: pd.DataFrame):
 
 def money_pack(df: pd.DataFrame, energy_price=0.12, electrode_price=3.0, annual_ton=250_000):
     if df.empty:
-        return {"eur_per_t": 0.0, "eur_per_year": 0.0, "notes": []}
+        return {"eur_per_t": 0.0, "eur_per_year": 0.0}
 
     kpi = kpi_pack(df)
     last = kpi["last"]
 
     eur_per_t = 0.0
-    notes = []
 
     # energy
     if "kwh_per_t" in df.columns and not pd.isna(last.get("kwh_per_t")) and not np.isnan(kpi["avg_kwh_t_10"]):
         real = float(last["kwh_per_t"])
         target = max(float(kpi["avg_kwh_t_10"]) - 5.0, 0.0)
         diff = max(real - target, 0.0)
-        gain = diff * energy_price
-        eur_per_t += gain
-        notes.append(("Energy", gain))
+        eur_per_t += diff * energy_price
 
     # electrode
     if "electrode_kg_per_t" in df.columns and not pd.isna(last.get("electrode_kg_per_t")):
         real_pt = float(last["electrode_kg_per_t"])
         target_pt = max(real_pt - 0.02, 0.0)  # demo
         diff = max(real_pt - target_pt, 0.0)
-        gain = diff * electrode_price
-        eur_per_t += gain
-        notes.append(("Electrode", gain))
+        eur_per_t += diff * electrode_price
 
     eur_per_year = eur_per_t * float(annual_ton)
-    return {"eur_per_t": eur_per_t, "eur_per_year": eur_per_year, "notes": notes}
+    return {"eur_per_t": eur_per_t, "eur_per_year": eur_per_year}
 
 
 def trend_chart(df: pd.DataFrame, cols=("kwh_per_t", "tap_temp_c", "electrode_kg_per_heat"), height=360):
@@ -430,7 +473,6 @@ def trend_chart(df: pd.DataFrame, cols=("kwh_per_t", "tap_temp_c", "electrode_kg
 
 
 def distro_summary(df: pd.DataFrame):
-    """Negatif psikoloji yaratmayan özet: percentile + son 3 ort."""
     out = []
 
     def add_metric(name, s: pd.Series, fmt="{:.2f}"):
@@ -644,9 +686,7 @@ def show_runtime_page(sim_mode: bool):
 
 
 # =========================================================
-# 3) ARC OPTIMIZER
-# - “En kötü/En iyi” yok
-# - What-if sağ kutunun altında
+# 3) ARC OPTIMIZER (What-if var)
 # =========================================================
 def show_arc_optimizer_page(sim_mode: bool):
     st.markdown("## 3. Arc Optimizer – Trendler, KPI ve Öneriler")
@@ -661,7 +701,6 @@ def show_arc_optimizer_page(sim_mode: bool):
     kpi = kpi_pack(df)
     last = kpi["last"]
 
-    # ÜST KPI
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Son Şarj kWh/t", f"{float(last.get('kwh_per_t')):.1f}" if pd.notna(last.get("kwh_per_t")) else "-")
     c2.metric("Son Şarj Elektrot", f"{float(last.get('electrode_kg_per_heat')):.2f} kg/şarj" if pd.notna(last.get("electrode_kg_per_heat")) else "-")
@@ -670,12 +709,8 @@ def show_arc_optimizer_page(sim_mode: bool):
 
     left, right = st.columns([3, 2])
 
-    # -------------------------
-    # SOL KOLON
-    # -------------------------
     with left:
         st.markdown("### 🎛️ Operasyon Paneli")
-
         st.markdown("#### 📌 Özet (Dağılım + Son 3 Ortalama)")
         summ = distro_summary(df)
         if summ.empty:
@@ -712,9 +747,6 @@ def show_arc_optimizer_page(sim_mode: bool):
         st.markdown("### Proses Trendi")
         trend_chart(df, cols=("kwh_per_t", "tap_temp_c", "electrode_kg_per_heat", "panel_delta_t_c", "slag_foaming_index"), height=420)
 
-    # -------------------------
-    # SAĞ KOLON: AI MODEL + WHAT-IF
-    # -------------------------
     with right:
         st.markdown("### 🤖 AI Model / Eğitim Modu")
 
@@ -734,12 +766,11 @@ def show_arc_optimizer_page(sim_mode: bool):
 
         if train_mode == "Model Eğit":
             st.caption("Mevcut veri setiyle modeli bir kez eğitir (demo / PoC).")
-            st.caption(f"Mevcut veri sayısı: {current_rows} şarj (önerilen ≥ 20).")
             if st.button("Modeli Eğit", key="btn_train_manual"):
                 train_arc_model(df, note="(Model Eğit)", min_samples=20)
 
         elif train_mode == "Sürekli Eğit":
-            st.caption("Her sayfa yenilemesinde mevcut veriyle model güncellenir (demo modu).")
+            st.caption("Her sayfa yenilemesinde model güncellenir (demo).")
             train_arc_model(df, note="(Sürekli Eğit)", min_samples=20, silent=True)
 
         elif train_mode == "Dijital İkiz Modu":
@@ -747,7 +778,6 @@ def show_arc_optimizer_page(sim_mode: bool):
                 f"Dijital ikiz: {DIGITAL_TWIN_HISTORICAL_HEATS} historical ile başlar, "
                 f"veri geldikçe {DIGITAL_TWIN_TARGET_HEATS} hedefe kadar öğrenir."
             )
-
             if current_rows < DIGITAL_TWIN_MIN_START:
                 st.warning(f"Dijital ikiz için en az {DIGITAL_TWIN_MIN_START} şarj gerekiyor; şu an {current_rows} var.")
             else:
@@ -816,7 +846,6 @@ def show_arc_optimizer_page(sim_mode: bool):
                     pred_dict = dict(zip(target_cols, preds))
                     kwh_pred = float(pred_dict.get("kwh_per_t", float("nan")))
                     tap_pred = float(pred_dict.get("tap_temp_c", float("nan")))
-
                     r1, r2 = st.columns(2)
                     r1.metric("AI kWh/t", f"{kwh_pred:.1f}")
                     r2.metric("AI Tap T", f"{tap_pred:.0f} °C")
@@ -845,21 +874,19 @@ def show_lab_simulation(sim_mode: bool):
 
     st.markdown("### 🔄 Veri Akışı Kontrolü")
 
+    # (widget key'leri LAB'e özel -> duplicate key yok)
     batch = st.slider("Akış hızı (şarj/adım)", 1, 500, SIM_STREAM_BATCH_DEFAULT, 1, key="lab_batch")
 
     c1, c2, c3 = st.columns([1.2, 1.2, 1.2])
     with c1:
-        st.toggle("9000 şarjı zamanla oku", key="sim_stream_enabled")
+        bind_toggle("9000 şarjı zamanla oku", "sim_stream_enabled", "lab_sim_stream_enabled")
     with c2:
-        st.toggle("Otomatik ilerlet", key="sim_stream_autostep")
+        bind_toggle("Otomatik ilerlet", "sim_stream_autostep", "lab_sim_stream_autostep")
     with c3:
-        st.toggle("Auto-refresh", key="sim_stream_autorefresh")
+        bind_toggle("Auto-refresh", "sim_stream_autorefresh", "lab_sim_stream_autorefresh")
 
     if st.session_state.sim_stream_autorefresh:
-        st.session_state.sim_stream_refresh_sec = st.number_input(
-            "Auto-refresh (sn)", min_value=1, max_value=60,
-            value=int(st.session_state.sim_stream_refresh_sec), step=1
-        )
+        bind_number_int("Auto-refresh (sn)", "sim_stream_refresh_sec", "lab_sim_stream_refresh_sec", 1, 60, 1)
         html_autorefresh(int(st.session_state.sim_stream_refresh_sec))
 
     b1, b2, b3 = st.columns([1.2, 1.2, 2.0])
@@ -874,6 +901,7 @@ def show_lab_simulation(sim_mode: bool):
     with b3:
         st.caption(f"Akış ilerleme: {int(st.session_state.sim_stream_progress)} / {SIM_STREAM_TOTAL}")
 
+    # Autostep: aynı progress’te tekrar etmesin
     if st.session_state.sim_stream_enabled and st.session_state.sim_stream_autostep:
         cur = int(st.session_state.sim_stream_progress)
         if st.session_state.sim_stream_last_step_progress != cur:
@@ -906,7 +934,6 @@ def show_lab_simulation(sim_mode: bool):
 # =========================================================
 def show_exec_page(sim_mode: bool):
     st.markdown("## Executive (CEO / CFO) – Value & Risk")
-
     df = to_df(get_active_data(sim_mode))
     if df.empty:
         st.info("Veri yok.")
@@ -930,7 +957,6 @@ def show_exec_page(sim_mode: bool):
 
 def show_plant_manager_page(sim_mode: bool):
     st.markdown("## Plant Manager – KPI & Performans Özeti")
-
     df = to_df(get_active_data(sim_mode))
     if df.empty:
         st.info("Veri yok.")
@@ -956,7 +982,6 @@ def show_plant_manager_page(sim_mode: bool):
 
 def show_operator_page(sim_mode: bool):
     st.markdown("## Engineer / Operator – Batch Dashboard")
-
     df = to_df(get_active_data(sim_mode))
     if df.empty:
         st.info("Veri yok.")
@@ -1007,6 +1032,7 @@ def show_operator_page(sim_mode: bool):
 
 # =========================================================
 # SIDEBAR: NAV + HIZLI SİM AKIŞ
+# - Lab sayfasında Hızlı Akış'ı göstermiyoruz (duplicate widget yok)
 # =========================================================
 def sidebar_controls():
     st.markdown("### FeCr AI")
@@ -1049,12 +1075,18 @@ def sidebar_controls():
 
     st.divider()
 
-    # Sim akış quick controls
-    if sim_mode:
+    # Bu ekranda Lab seçiliyse, quick akış kontrolünü yalnızca Lab sayfasında göster.
+    is_lab = (st.session_state.view_mode == "Persona" and st.session_state.persona == "Lab (Advanced)") or \
+             (st.session_state.view_mode != "Persona" and st.session_state.classic_page == "Lab (Advanced)")
+
+    if sim_mode and (not is_lab):
         st.markdown("### 🔄 Hızlı Akış")
+
         batch = st.slider("Batch (şarj/adım)", 1, 500, SIM_STREAM_BATCH_DEFAULT, 1, key="sidebar_batch")
-        st.toggle("9000 şarjı zamanla oku", key="sim_stream_enabled")
-        st.toggle("Otomatik ilerlet", key="sim_stream_autostep")
+
+        # sidebar widget key'leri benzersiz
+        bind_toggle("9000 şarjı zamanla oku", "sim_stream_enabled", "sb_sim_stream_enabled")
+        bind_toggle("Otomatik ilerlet", "sim_stream_autostep", "sb_sim_stream_autostep")
 
         c1, c2 = st.columns(2)
         with c1:
