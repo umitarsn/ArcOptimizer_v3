@@ -1,8 +1,10 @@
+# app.py
 import os
 import json
 import random
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
+from typing import Optional, Tuple, Dict, Any, List
 
 import numpy as np
 import pandas as pd
@@ -90,10 +92,8 @@ _init_state()
 
 # =========================================================
 # WIDGET BIND HELPERS (duplicate key fix)
-# - Aynı state'i iki farklı widget ile yönetmek için
-#   widget key'lerini benzersiz tutup state'i senkronluyoruz.
 # =========================================================
-def bind_toggle(label: str, state_key: str, widget_key: str, help_text: str | None = None):
+def bind_toggle(label: str, state_key: str, widget_key: str, help_text: Optional[str] = None):
     def _sync():
         st.session_state[state_key] = st.session_state[widget_key]
 
@@ -113,7 +113,7 @@ def bind_slider_int(
     min_v: int,
     max_v: int,
     step: int = 1,
-    help_text: str | None = None,
+    help_text: Optional[str] = None,
 ):
     def _sync():
         st.session_state[state_key] = int(st.session_state[widget_key])
@@ -137,7 +137,7 @@ def bind_number_int(
     min_v: int,
     max_v: int,
     step: int = 1,
-    help_text: str | None = None,
+    help_text: Optional[str] = None,
 ):
     def _sync():
         st.session_state[state_key] = int(st.session_state[widget_key])
@@ -451,43 +451,6 @@ def money_pack(df: pd.DataFrame, energy_price=0.12, electrode_price=3.0, annual_
     return {"eur_per_t": eur_per_t, "eur_per_year": eur_per_year}
 
 
-def trend_chart(df: pd.DataFrame, cols=("kwh_per_t", "tap_temp_c", "electrode_kg_per_heat"), height=360):
-    if df.empty or "timestamp_dt" not in df.columns:
-        st.info("Trend için veri yok.")
-        return
-
-    use_cols = [c for c in cols if c in df.columns]
-    if not use_cols:
-        st.info("Trend için uygun kolon yok.")
-        return
-
-    tmp = df[["timestamp_dt"] + use_cols].copy()
-    long = tmp.melt("timestamp_dt", var_name="var", value_name="val")
-    var_map = {
-        "kwh_per_t": "kWh/t",
-        "tap_temp_c": "Tap T (°C)",
-        "electrode_kg_per_heat": "Elektrot (kg/şarj)",
-        "electrode_kg_per_t": "Elektrot (kg/t)",
-        "panel_delta_t_c": "Panel ΔT (°C)",
-        "o2_flow_nm3h": "O2 (Nm³/h)",
-        "duration_min": "Süre (dk)",
-        "slag_foaming_index": "Slag Foaming",
-    }
-    long["var_name"] = long["var"].map(var_map).fillna(long["var"])
-
-    ch = (
-        alt.Chart(long.dropna())
-        .mark_line()
-        .encode(
-            x=alt.X("timestamp_dt:T", title="Zaman", axis=alt.Axis(format="%d.%m %H:%M", labelAngle=-35)),
-            y=alt.Y("val:Q", title=None),
-            color=alt.Color("var_name:N", title=None, legend=alt.Legend(orient="top", direction="horizontal")),
-        )
-        .properties(height=height)
-    )
-    st.altair_chart(ch.interactive(), use_container_width=True)
-
-
 def distro_summary(df: pd.DataFrame):
     out = []
 
@@ -511,6 +474,275 @@ def distro_summary(df: pd.DataFrame):
         add_metric("Tap T (°C)", df["tap_temp_c"], fmt="{:.0f}")
 
     return pd.DataFrame(out)
+
+
+# =========================================================
+# 24H + AI TAHMİN GRAFİĞİ (zoom yok, tahmin sağda kesikli)
+# =========================================================
+def build_24h_actual_vs_ai_chart(
+    df: pd.DataFrame,
+    model,
+    feat_cols: Optional[List[str]],
+    target_cols: Optional[List[str]],
+    height: int = 420,
+):
+    if df.empty or "timestamp_dt" not in df.columns:
+        st.info("Trend için veri yok.")
+        return
+
+    df = df.dropna(subset=["timestamp_dt"]).copy()
+    if df.empty:
+        st.info("Trend için zaman bilgisi yok.")
+        return
+
+    last_time = df["timestamp_dt"].max()
+    window_start = last_time - timedelta(hours=24)
+    df_24 = df[df["timestamp_dt"] >= window_start].copy()
+    if df_24.empty:
+        st.info("Son 24 saatlik pencerede veri yok.")
+        return
+
+    # Gösterilecek değişkenler (3 değer yeterli)
+    keep = []
+    if "kwh_per_t" in df_24.columns:
+        keep.append("kwh_per_t")
+    if "electrode_kg_per_t" in df_24.columns:
+        keep.append("electrode_kg_per_t")
+    if "tap_temp_c" in df_24.columns:
+        keep.append("tap_temp_c")
+
+    if not keep:
+        st.info("Grafik için uygun kolon yok.")
+        return
+
+    var_map = {
+        "kwh_per_t": "kWh/t",
+        "electrode_kg_per_t": "Elektrot (kg/t)",
+        "tap_temp_c": "Tap T (°C)",
+    }
+
+    # ---- AI hedef/potansiyel: (model varsa what-if mantığıyla, yoksa heuristik)
+    # Trendde sağa doğru "AI kontrol edilseydi" eğrisi: son noktadan hedefe yaklaşan çizgi
+    future_h = 4  # sağ taraf tahmin penceresi: 4 saat (ekranı zoom-out gerektirmeden gösterir)
+    future_end = last_time + timedelta(hours=future_h)
+
+    # Son nokta
+    last_row = df_24.iloc[-1]
+
+    # Hedef belirleme (AI kontrollü potansiyel)
+    # - model varsa: son 50'nin ortalama feature'ları ile tahmin alıp "hedef" üret
+    # - model yoksa: basit hedef: kwh/t -5, elektrot -0.002 kg/t, tap +5°C (örnek)
+    tail50 = df.tail(50).copy()
+
+    def safe_mean(series: pd.Series, default: float) -> float:
+        series = series.dropna()
+        return float(series.mean()) if len(series) else float(default)
+
+    # actual bazları
+    base_kwh = safe_mean(tail50["kwh_per_t"], safe_mean(df_24["kwh_per_t"], 420.0)) if "kwh_per_t" in df.columns else 420.0
+    base_elec = safe_mean(tail50["electrode_kg_per_t"], safe_mean(df_24["electrode_kg_per_t"], 0.055)) if "electrode_kg_per_t" in df.columns else 0.055
+    base_tap = safe_mean(tail50["tap_temp_c"], safe_mean(df_24["tap_temp_c"], 1610.0)) if "tap_temp_c" in df.columns else 1610.0
+
+    target_kwh = max(base_kwh - 5.0, 0.0)
+    target_elec = max(base_elec - 0.002, 0.0)
+    target_tap = base_tap + 5.0
+
+    # model ile daha “gerçek” hedef istenirse: last50 ortalama feature ile predict
+    if model is not None and feat_cols is not None and target_cols is not None:
+        # feature'ları last50 ortalama ile doldur; köpük ve paneli “kontrol hedefi”ne çek (demo)
+        feat_defaults = {}
+        for c in feat_cols:
+            if c in tail50.columns:
+                feat_defaults[c] = safe_mean(tail50[c], safe_mean(df[c], 0.0))
+            else:
+                feat_defaults[c] = 0.0
+
+        # kontrol hedefleri (demo)
+        if "slag_foaming_index" in feat_defaults:
+            feat_defaults["slag_foaming_index"] = 7.0
+        if "panel_delta_t_c" in feat_defaults:
+            feat_defaults["panel_delta_t_c"] = min(20.0, float(feat_defaults["panel_delta_t_c"]))
+        # elektrot ve enerji zaten feature; burada “modelin” kwh/t ve tapT tahminini hedef gibi kullanıyoruz
+        row_df = pd.DataFrame([feat_defaults])[feat_cols].fillna(0.0)
+        try:
+            preds = model.predict(row_df)[0]
+            pred_dict = dict(zip(target_cols, preds))
+            if "kwh_per_t" in pred_dict and np.isfinite(pred_dict["kwh_per_t"]):
+                target_kwh = max(float(pred_dict["kwh_per_t"]), 0.0)
+            if "tap_temp_c" in pred_dict and np.isfinite(pred_dict["tap_temp_c"]):
+                target_tap = float(pred_dict["tap_temp_c"])
+            # elektrot hedefi: kontrol ile bir miktar düşüş (demo)
+            target_elec = max(base_elec - 0.002, 0.0)
+        except Exception:
+            pass
+
+    # ---- Actual long
+    actual = df_24[["timestamp_dt"] + keep].melt("timestamp_dt", var_name="var", value_name="val").dropna()
+    actual["type"] = "Aktüel"
+    actual["var_name"] = actual["var"].map(var_map).fillna(actual["var"])
+
+    # ---- Future (AI) points: son ölçümden hedefe lineer yaklaşım
+    def get_last_val(col: str, fallback: float) -> float:
+        v = last_row.get(col, np.nan)
+        if pd.isna(v):
+            return float(fallback)
+        return float(v)
+
+    last_kwh = get_last_val("kwh_per_t", base_kwh)
+    last_elec = get_last_val("electrode_kg_per_t", base_elec)
+    last_tap = get_last_val("tap_temp_c", base_tap)
+
+    future_points = []
+    steps = 8  # 4 saat / 30 dk çözünürlük gibi
+    for i in range(steps + 1):
+        frac = i / steps
+        t = last_time + (future_end - last_time) * frac
+        row = {"timestamp_dt": t}
+        if "kwh_per_t" in keep:
+            row["kwh_per_t"] = last_kwh + (target_kwh - last_kwh) * frac
+        if "electrode_kg_per_t" in keep:
+            row["electrode_kg_per_t"] = last_elec + (target_elec - last_elec) * frac
+        if "tap_temp_c" in keep:
+            row["tap_temp_c"] = last_tap + (target_tap - last_tap) * frac
+        future_points.append(row)
+
+    future_df = pd.DataFrame(future_points)
+    future = future_df[["timestamp_dt"] + keep].melt("timestamp_dt", var_name="var", value_name="val").dropna()
+    future["type"] = "Potansiyel (AI)"
+    future["var_name"] = future["var"].map(var_map).fillna(future["var"])
+
+    combined = pd.concat([actual, future], ignore_index=True)
+
+    # ---- domain: 24h + 4h (zoom-out gerektirmeden tahmin görünür)
+    domain_min = window_start
+    domain_max = future_end
+
+    base_chart = (
+        alt.Chart(combined)
+        .mark_line()
+        .encode(
+            x=alt.X(
+                "timestamp_dt:T",
+                title="Zaman (son 24 saat + AI tahmin)",
+                scale=alt.Scale(domain=[domain_min, domain_max]),
+                axis=alt.Axis(format="%d.%m %H:%M", tickCount=10, labelAngle=-35),
+            ),
+            y=alt.Y("val:Q", title=None),
+            color=alt.Color("var_name:N", title=None, legend=alt.Legend(orient="top", direction="horizontal")),
+            strokeDash=alt.StrokeDash(
+                "type:N",
+                title=None,
+                scale=alt.Scale(domain=["Aktüel", "Potansiyel (AI)"], range=[[1, 0], [6, 4]]),
+            ),
+        )
+        .properties(height=height)
+    )
+
+    # ---- “now” dik çizgi
+    now_df = pd.DataFrame({"timestamp_dt": [last_time]})
+    now_rule = alt.Chart(now_df).mark_rule(strokeDash=[2, 2]).encode(x="timestamp_dt:T")
+
+    # ---- “Döküm anı (AI)” gösterimi: Tap T için future_end noktası
+    tap_point_time = future_end
+    tap_point_val = float(future_df.iloc[-1].get("tap_temp_c", np.nan))
+    layers = [base_chart, now_rule]
+
+    if "tap_temp_c" in keep and np.isfinite(tap_point_val):
+        tp = pd.DataFrame({"timestamp_dt": [tap_point_time], "val": [tap_point_val]})
+        point = alt.Chart(tp).mark_point(size=120, filled=True).encode(x="timestamp_dt:T", y="val:Q")
+        label = pd.DataFrame({
+            "timestamp_dt": [tap_point_time],
+            "val": [tap_point_val],
+            "label1": [f"Hedef Döküm Zamanı (AI): {tap_point_time.strftime('%d.%m %H:%M')}"],
+            "label2": [f"Tap T: {tap_point_val:.0f} °C"],
+        })
+        label1 = alt.Chart(label).mark_text(align="left", dx=25, dy=-35, fontSize=12, fontWeight="bold").encode(
+            x="timestamp_dt:T", y="val:Q", text="label1:N"
+        )
+        label2 = alt.Chart(label).mark_text(align="left", dx=25, dy=-12, fontSize=11).encode(
+            x="timestamp_dt:T", y="val:Q", text="label2:N"
+        )
+        layers.extend([point, label1, label2])
+
+    full = alt.layer(*layers).resolve_scale(y="independent")
+    st.altair_chart(full, use_container_width=True)
+
+    # küçük açıklama
+    delta_min = (future_end - last_time).total_seconds() / 60.0
+    st.caption(
+        f"Grafikte sol taraf **aktüel (son 24 saat)**, sağ taraf **AI potansiyel tahmin (kesikli)**. "
+        f"'now' çizgisi son ölçüm anı. Hedef döküm anı ~ {delta_min:.0f} dk sonrası."
+    )
+
+
+def actual_vs_potential_last50_table(df: pd.DataFrame, model, feat_cols, target_cols):
+    """3 metrik için: Son 50 aktüel ortalama vs AI potansiyel (demo)."""
+    if df.empty:
+        return
+
+    tail = df.tail(50).copy()
+    def m(col, default=np.nan):
+        if col not in tail.columns:
+            return default
+        s = tail[col].dropna()
+        return float(s.mean()) if len(s) else default
+
+    act_kwh = m("kwh_per_t", np.nan)
+    act_elec = m("electrode_kg_per_t", np.nan)
+    act_tap = m("tap_temp_c", np.nan)
+
+    pot_kwh = np.nan
+    pot_elec = np.nan
+    pot_tap = np.nan
+
+    # default potansiyel (demo)
+    if np.isfinite(act_kwh):
+        pot_kwh = max(act_kwh - 5.0, 0.0)
+    if np.isfinite(act_elec):
+        pot_elec = max(act_elec - 0.002, 0.0)
+    if np.isfinite(act_tap):
+        pot_tap = act_tap + 5.0
+
+    # model varsa: kwh/t & tapT hedefi için predict (last50 feature ort + kontrol hedefleri)
+    if model is not None and feat_cols is not None and target_cols is not None and len(tail) >= 10:
+        feat_defaults = {}
+        for c in feat_cols:
+            if c in tail.columns:
+                s = tail[c].dropna()
+                feat_defaults[c] = float(s.mean()) if len(s) else 0.0
+            else:
+                feat_defaults[c] = 0.0
+
+        if "slag_foaming_index" in feat_defaults:
+            feat_defaults["slag_foaming_index"] = 7.0
+        if "panel_delta_t_c" in feat_defaults:
+            feat_defaults["panel_delta_t_c"] = min(20.0, float(feat_defaults["panel_delta_t_c"]))
+
+        row_df = pd.DataFrame([feat_defaults])[feat_cols].fillna(0.0)
+        try:
+            preds = model.predict(row_df)[0]
+            pred_dict = dict(zip(target_cols, preds))
+            if "kwh_per_t" in pred_dict and np.isfinite(pred_dict["kwh_per_t"]):
+                pot_kwh = max(float(pred_dict["kwh_per_t"]), 0.0)
+            if "tap_temp_c" in pred_dict and np.isfinite(pred_dict["tap_temp_c"]):
+                pot_tap = float(pred_dict["tap_temp_c"])
+            # elektrot hedefini yine kontrollü düşüş (demo)
+            if np.isfinite(act_elec):
+                pot_elec = max(act_elec - 0.002, 0.0)
+        except Exception:
+            pass
+
+    rows = []
+    if np.isfinite(act_kwh):
+        rows.append({"Gösterge": "kWh/t", "Aktüel (son50 ort.)": f"{act_kwh:.1f}", "Potansiyel (AI)": f"{pot_kwh:.1f}" if np.isfinite(pot_kwh) else "-"})
+    if np.isfinite(act_elec):
+        rows.append({"Gösterge": "Elektrot (kg/t)", "Aktüel (son50 ort.)": f"{act_elec:.3f}", "Potansiyel (AI)": f"{pot_elec:.3f}" if np.isfinite(pot_elec) else "-"})
+    if np.isfinite(act_tap):
+        rows.append({"Gösterge": "Tap T (°C)", "Aktüel (son50 ort.)": f"{act_tap:.0f}", "Potansiyel (AI)": f"{pot_tap:.0f}" if np.isfinite(pot_tap) else "-"})
+
+    if rows:
+        st.markdown("#### 🎯 Aktüel vs Potansiyel (Son 50 Ortalama)")
+        st.table(pd.DataFrame(rows))
 
 
 # =========================================================
@@ -702,7 +934,7 @@ def show_runtime_page(sim_mode: bool):
 
 
 # =========================================================
-# 3) ARC OPTIMIZER (What-if var)
+# 3) ARC OPTIMIZER (What-if var + 24h AI grafiği)
 # =========================================================
 def show_arc_optimizer_page(sim_mode: bool):
     st.markdown("## 3. Arc Optimizer – Trendler, KPI ve Öneriler")
@@ -760,8 +992,10 @@ def show_arc_optimizer_page(sim_mode: bool):
         else:
             st.success("✅ Proses stabil – belirgin alarm yok")
 
-        st.markdown("### Proses Trendi")
-        trend_chart(df, cols=("kwh_per_t", "tap_temp_c", "electrode_kg_per_heat", "panel_delta_t_c", "slag_foaming_index"), height=420)
+        # ---- 24h + AI tahmin trendi (kesikli sağ taraf + döküm anı label)
+        st.markdown("### Proses Trendi (24 saat) + AI Tahmin (sağ taraf)")
+        model, feat_cols, target_cols = load_arc_model()
+        build_24h_actual_vs_ai_chart(df, model, feat_cols, target_cols, height=420)
 
     with right:
         st.markdown("### 🤖 AI Model / Eğitim Modu")
@@ -816,11 +1050,14 @@ def show_arc_optimizer_page(sim_mode: bool):
                 f"Toplam eğitim: {st.session_state.model_train_count}"
             )
 
-        # ✅ What-if
+        # ---- Aktüel vs Potansiyel (son 50)
+        model, feat_cols, target_cols = load_arc_model()
+        actual_vs_potential_last50_table(df, model, feat_cols, target_cols)
+
+        # ---- What-if
         st.markdown("---")
         st.markdown("### 🧪 What-if Simülasyonu (Arc Optimizer)")
 
-        model, feat_cols, target_cols = load_arc_model()
         if model is None or feat_cols is None:
             st.info("What-if için önce modeli eğitin (en az ~20 şarj).")
         else:
@@ -863,8 +1100,8 @@ def show_arc_optimizer_page(sim_mode: bool):
                     kwh_pred = float(pred_dict.get("kwh_per_t", float("nan")))
                     tap_pred = float(pred_dict.get("tap_temp_c", float("nan")))
                     r1, r2 = st.columns(2)
-                    r1.metric("AI kWh/t", f"{kwh_pred:.1f}")
-                    r2.metric("AI Tap T", f"{tap_pred:.0f} °C")
+                    r1.metric("AI kWh/t", f"{kwh_pred:.1f}" if np.isfinite(kwh_pred) else "-")
+                    r2.metric("AI Tap T", f"{tap_pred:.0f} °C" if np.isfinite(tap_pred) else "-")
                 except Exception as e:
                     st.error(f"Tahmin hatası: {e}")
 
@@ -934,12 +1171,34 @@ def show_lab_simulation(sim_mode: bool):
     if not summ.empty:
         st.table(summ)
 
-    st.markdown("### Trend")
-    trend_chart(
-        df,
-        cols=("kwh_per_t", "tap_temp_c", "electrode_kg_per_heat", "panel_delta_t_c", "o2_flow_nm3h", "slag_foaming_index"),
-        height=440,
-    )
+    st.markdown("### Trend (Lab)")
+    # Lab’da serbest trend (çok metrik)
+    tmp = df.tail(24 * 7)  # daha kompakt
+    use_cols = [c for c in ["kwh_per_t", "tap_temp_c", "electrode_kg_per_heat", "panel_delta_t_c", "o2_flow_nm3h", "slag_foaming_index"] if c in tmp.columns]
+    if use_cols:
+        long = tmp[["timestamp_dt"] + use_cols].melt("timestamp_dt", var_name="var", value_name="val").dropna()
+        var_map = {
+            "kwh_per_t": "kWh/t",
+            "tap_temp_c": "Tap T (°C)",
+            "electrode_kg_per_heat": "Elektrot (kg/şarj)",
+            "panel_delta_t_c": "Panel ΔT (°C)",
+            "o2_flow_nm3h": "O2 (Nm³/h)",
+            "slag_foaming_index": "Slag Foaming",
+        }
+        long["var_name"] = long["var"].map(var_map).fillna(long["var"])
+        ch = (
+            alt.Chart(long)
+            .mark_line()
+            .encode(
+                x=alt.X("timestamp_dt:T", title="Zaman", axis=alt.Axis(format="%d.%m %H:%M", labelAngle=-35)),
+                y=alt.Y("val:Q", title=None),
+                color=alt.Color("var_name:N", title=None, legend=alt.Legend(orient="top", direction="horizontal")),
+            )
+            .properties(height=440)
+        )
+        st.altair_chart(ch.interactive(), use_container_width=True)
+    else:
+        st.info("Trend için uygun kolon yok.")
 
     with st.expander("Ham tablo (lab)"):
         st.dataframe(df.tail(200), use_container_width=True)
@@ -962,8 +1221,12 @@ def show_exec_page(sim_mode: bool):
     a3.metric("Model", "Ready" if os.path.exists(MODEL_SAVE_PATH) else "Needs training")
     a4.metric("Veri (şarj)", f"{len(df)}")
 
-    st.markdown("### Büyük Resim (Trend)")
-    trend_chart(df, cols=("kwh_per_t", "electrode_kg_per_t"), height=320)
+    st.markdown("### 24h Trend + AI (sadece 2 metrik)")
+    model, feat_cols, target_cols = load_arc_model()
+    # exec için sadece kWh/t + Elektrot (kg/t)
+    df2 = df.copy()
+    # chart fonksiyonu 3 metrik destekler, burada df’yi bırakıyoruz ama izlenecek kolonlar df’de var.
+    build_24h_actual_vs_ai_chart(df2, model, feat_cols, target_cols, height=320)
 
     st.markdown("### Özet (Dağılım)")
     summ = distro_summary(df)
@@ -987,8 +1250,9 @@ def show_plant_manager_page(sim_mode: bool):
     top3.metric("Son10 Elektrot kg/t", f"{kpi['avg_elec_pt_10']:.3f}" if not np.isnan(kpi["avg_elec_pt_10"]) else "-")
     top4.metric("Potansiyel (€/t)", f"{m['eur_per_t']:.2f}")
 
-    st.markdown("### Trend")
-    trend_chart(df, cols=("kwh_per_t", "tap_temp_c", "electrode_kg_per_t"), height=360)
+    st.markdown("### 24h Trend + AI")
+    model, feat_cols, target_cols = load_arc_model()
+    build_24h_actual_vs_ai_chart(df, model, feat_cols, target_cols, height=360)
 
     st.markdown("### Dağılım Özeti")
     summ = distro_summary(df)
@@ -1031,7 +1295,30 @@ def show_operator_page(sim_mode: bool):
         k4.metric("Panel ΔT", f"{float(r.get('panel_delta_t_c')):.1f} °C" if pd.notna(r.get("panel_delta_t_c")) else "-")
 
         st.markdown("#### Trend (son 100)")
-        trend_chart(df.tail(100), cols=("kwh_per_t", "tap_temp_c", "panel_delta_t_c", "slag_foaming_index"), height=320)
+        tmp = df.tail(100)
+        use_cols = [c for c in ["kwh_per_t", "tap_temp_c", "panel_delta_t_c", "slag_foaming_index"] if c in tmp.columns]
+        if use_cols:
+            long = tmp[["timestamp_dt"] + use_cols].melt("timestamp_dt", var_name="var", value_name="val").dropna()
+            var_map = {
+                "kwh_per_t": "kWh/t",
+                "tap_temp_c": "Tap T (°C)",
+                "panel_delta_t_c": "Panel ΔT (°C)",
+                "slag_foaming_index": "Slag Foaming",
+            }
+            long["var_name"] = long["var"].map(var_map).fillna(long["var"])
+            ch = (
+                alt.Chart(long)
+                .mark_line()
+                .encode(
+                    x=alt.X("timestamp_dt:T", title="Zaman", axis=alt.Axis(format="%d.%m %H:%M", labelAngle=-35)),
+                    y=alt.Y("val:Q", title=None),
+                    color=alt.Color("var_name:N", title=None, legend=alt.Legend(orient="top", direction="horizontal")),
+                )
+                .properties(height=320)
+            )
+            st.altair_chart(ch.interactive(), use_container_width=True)
+        else:
+            st.info("Trend için uygun kolon yok.")
 
         st.markdown("#### Alarmlar (rule)")
         alarms = []
