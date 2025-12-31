@@ -260,7 +260,6 @@ def advance_sim_stream(batch: int):
 
 
 def html_autorefresh(seconds: int):
-    # Streamlit'te st.autorefresh yok. Paketsiz çözüm: meta refresh.
     sec = max(1, int(seconds))
     components.html(f"<meta http-equiv='refresh' content='{sec}'>", height=0)
 
@@ -387,7 +386,6 @@ def to_df(data_source):
 
     df = df.sort_values("timestamp_dt")
 
-    # derived
     if "kwh_per_t" not in df.columns and "energy_kwh" in df.columns and "tap_weight_t" in df.columns:
         df["kwh_per_t"] = df.apply(
             lambda r: (r["energy_kwh"] / r["tap_weight_t"]) if r.get("tap_weight_t", 0) else np.nan,
@@ -433,14 +431,12 @@ def money_pack(df: pd.DataFrame, energy_price=0.12, electrode_price=3.0, annual_
 
     eur_per_t = 0.0
 
-    # energy
     if "kwh_per_t" in df.columns and not pd.isna(last.get("kwh_per_t")) and not np.isnan(kpi["avg_kwh_t_10"]):
         real = float(last["kwh_per_t"])
         target = max(float(kpi["avg_kwh_t_10"]) - 5.0, 0.0)
         diff = max(real - target, 0.0)
         eur_per_t += diff * energy_price
 
-    # electrode
     if "electrode_kg_per_t" in df.columns and not pd.isna(last.get("electrode_kg_per_t")):
         real_pt = float(last["electrode_kg_per_t"])
         target_pt = max(real_pt - 0.02, 0.0)  # demo
@@ -502,7 +498,6 @@ def build_24h_actual_vs_ai_chart(
         st.info("Son 24 saatlik pencerede veri yok.")
         return
 
-    # Gösterilecek değişkenler (3 değer yeterli)
     keep = []
     if "kwh_per_t" in df_24.columns:
         keep.append("kwh_per_t")
@@ -521,24 +516,16 @@ def build_24h_actual_vs_ai_chart(
         "tap_temp_c": "Tap T (°C)",
     }
 
-    # ---- AI hedef/potansiyel: (model varsa what-if mantığıyla, yoksa heuristik)
-    # Trendde sağa doğru "AI kontrol edilseydi" eğrisi: son noktadan hedefe yaklaşan çizgi
-    future_h = 4  # sağ taraf tahmin penceresi: 4 saat (ekranı zoom-out gerektirmeden gösterir)
+    future_h = 4
     future_end = last_time + timedelta(hours=future_h)
 
-    # Son nokta
     last_row = df_24.iloc[-1]
-
-    # Hedef belirleme (AI kontrollü potansiyel)
-    # - model varsa: son 50'nin ortalama feature'ları ile tahmin alıp "hedef" üret
-    # - model yoksa: basit hedef: kwh/t -5, elektrot -0.002 kg/t, tap +5°C (örnek)
     tail50 = df.tail(50).copy()
 
     def safe_mean(series: pd.Series, default: float) -> float:
         series = series.dropna()
         return float(series.mean()) if len(series) else float(default)
 
-    # actual bazları
     base_kwh = safe_mean(tail50["kwh_per_t"], safe_mean(df_24["kwh_per_t"], 420.0)) if "kwh_per_t" in df.columns else 420.0
     base_elec = safe_mean(tail50["electrode_kg_per_t"], safe_mean(df_24["electrode_kg_per_t"], 0.055)) if "electrode_kg_per_t" in df.columns else 0.055
     base_tap = safe_mean(tail50["tap_temp_c"], safe_mean(df_24["tap_temp_c"], 1610.0)) if "tap_temp_c" in df.columns else 1610.0
@@ -547,9 +534,7 @@ def build_24h_actual_vs_ai_chart(
     target_elec = max(base_elec - 0.002, 0.0)
     target_tap = base_tap + 5.0
 
-    # model ile daha “gerçek” hedef istenirse: last50 ortalama feature ile predict
     if model is not None and feat_cols is not None and target_cols is not None:
-        # feature'ları last50 ortalama ile doldur; köpük ve paneli “kontrol hedefi”ne çek (demo)
         feat_defaults = {}
         for c in feat_cols:
             if c in tail50.columns:
@@ -557,12 +542,11 @@ def build_24h_actual_vs_ai_chart(
             else:
                 feat_defaults[c] = 0.0
 
-        # kontrol hedefleri (demo)
         if "slag_foaming_index" in feat_defaults:
             feat_defaults["slag_foaming_index"] = 7.0
         if "panel_delta_t_c" in feat_defaults:
             feat_defaults["panel_delta_t_c"] = min(20.0, float(feat_defaults["panel_delta_t_c"]))
-        # elektrot ve enerji zaten feature; burada “modelin” kwh/t ve tapT tahminini hedef gibi kullanıyoruz
+
         row_df = pd.DataFrame([feat_defaults])[feat_cols].fillna(0.0)
         try:
             preds = model.predict(row_df)[0]
@@ -571,17 +555,14 @@ def build_24h_actual_vs_ai_chart(
                 target_kwh = max(float(pred_dict["kwh_per_t"]), 0.0)
             if "tap_temp_c" in pred_dict and np.isfinite(pred_dict["tap_temp_c"]):
                 target_tap = float(pred_dict["tap_temp_c"])
-            # elektrot hedefi: kontrol ile bir miktar düşüş (demo)
             target_elec = max(base_elec - 0.002, 0.0)
         except Exception:
             pass
 
-    # ---- Actual long
     actual = df_24[["timestamp_dt"] + keep].melt("timestamp_dt", var_name="var", value_name="val").dropna()
     actual["type"] = "Aktüel"
     actual["var_name"] = actual["var"].map(var_map).fillna(actual["var"])
 
-    # ---- Future (AI) points: son ölçümden hedefe lineer yaklaşım
     def get_last_val(col: str, fallback: float) -> float:
         v = last_row.get(col, np.nan)
         if pd.isna(v):
@@ -593,7 +574,7 @@ def build_24h_actual_vs_ai_chart(
     last_tap = get_last_val("tap_temp_c", base_tap)
 
     future_points = []
-    steps = 8  # 4 saat / 30 dk çözünürlük gibi
+    steps = 8
     for i in range(steps + 1):
         frac = i / steps
         t = last_time + (future_end - last_time) * frac
@@ -613,7 +594,6 @@ def build_24h_actual_vs_ai_chart(
 
     combined = pd.concat([actual, future], ignore_index=True)
 
-    # ---- domain: 24h + 4h (zoom-out gerektirmeden tahmin görünür)
     domain_min = window_start
     domain_max = future_end
 
@@ -638,11 +618,9 @@ def build_24h_actual_vs_ai_chart(
         .properties(height=height)
     )
 
-    # ---- “now” dik çizgi
     now_df = pd.DataFrame({"timestamp_dt": [last_time]})
     now_rule = alt.Chart(now_df).mark_rule(strokeDash=[2, 2]).encode(x="timestamp_dt:T")
 
-    # ---- “Döküm anı (AI)” gösterimi: Tap T için future_end noktası
     tap_point_time = future_end
     tap_point_val = float(future_df.iloc[-1].get("tap_temp_c", np.nan))
     layers = [base_chart, now_rule]
@@ -667,11 +645,10 @@ def build_24h_actual_vs_ai_chart(
     full = alt.layer(*layers).resolve_scale(y="independent")
     st.altair_chart(full, use_container_width=True)
 
-    # küçük açıklama
     delta_min = (future_end - last_time).total_seconds() / 60.0
     st.caption(
-        f"Grafikte sol taraf **aktüel (son 24 saat)**, sağ taraf **AI potansiyel tahmin (kesikli)**. "
-        f"'now' çizgisi son ölçüm anı. Hedef döküm anı ~ {delta_min:.0f} dk sonrası."
+        f"Sol: **aktüel (son 24 saat)** · Sağ: **AI potansiyel (kesikli)** · "
+        f"'now' çizgisi: son ölçüm. Hedef döküm anı ~ **{delta_min:.0f} dk** sonrası."
     )
 
 
@@ -695,7 +672,6 @@ def actual_vs_potential_last50_table(df: pd.DataFrame, model, feat_cols, target_
     pot_elec = np.nan
     pot_tap = np.nan
 
-    # default potansiyel (demo)
     if np.isfinite(act_kwh):
         pot_kwh = max(act_kwh - 5.0, 0.0)
     if np.isfinite(act_elec):
@@ -703,7 +679,6 @@ def actual_vs_potential_last50_table(df: pd.DataFrame, model, feat_cols, target_
     if np.isfinite(act_tap):
         pot_tap = act_tap + 5.0
 
-    # model varsa: kwh/t & tapT hedefi için predict (last50 feature ort + kontrol hedefleri)
     if model is not None and feat_cols is not None and target_cols is not None and len(tail) >= 10:
         feat_defaults = {}
         for c in feat_cols:
@@ -726,7 +701,6 @@ def actual_vs_potential_last50_table(df: pd.DataFrame, model, feat_cols, target_
                 pot_kwh = max(float(pred_dict["kwh_per_t"]), 0.0)
             if "tap_temp_c" in pred_dict and np.isfinite(pred_dict["tap_temp_c"]):
                 pot_tap = float(pred_dict["tap_temp_c"])
-            # elektrot hedefini yine kontrollü düşüş (demo)
             if np.isfinite(act_elec):
                 pot_elec = max(act_elec - 0.002, 0.0)
         except Exception:
@@ -959,12 +933,14 @@ def show_arc_optimizer_page(sim_mode: bool):
 
     with left:
         st.markdown("### 🎛️ Operasyon Paneli")
-        st.markdown("#### 📌 Özet (Dağılım + Son 3 Ortalama)")
-        summ = distro_summary(df)
-        if summ.empty:
-            st.info("Özet için en az birkaç dolu kayıt gerekir.")
-        else:
-            st.table(summ)
+
+        # ✅ KALDIRILDI:
+        # st.markdown("#### 📌 Özet (Dağılım + Son 3 Ortalama)")
+        # summ = distro_summary(df)
+        # if summ.empty:
+        #     st.info("Özet için en az birkaç dolu kayıt gerekir.")
+        # else:
+        #     st.table(summ)
 
         st.markdown("#### 🚨 Proses Durumu / Alarmlar")
         alarms = []
@@ -992,7 +968,6 @@ def show_arc_optimizer_page(sim_mode: bool):
         else:
             st.success("✅ Proses stabil – belirgin alarm yok")
 
-        # ---- 24h + AI tahmin trendi (kesikli sağ taraf + döküm anı label)
         st.markdown("### Proses Trendi (24 saat) + AI Tahmin (sağ taraf)")
         model, feat_cols, target_cols = load_arc_model()
         build_24h_actual_vs_ai_chart(df, model, feat_cols, target_cols, height=420)
@@ -1050,11 +1025,9 @@ def show_arc_optimizer_page(sim_mode: bool):
                 f"Toplam eğitim: {st.session_state.model_train_count}"
             )
 
-        # ---- Aktüel vs Potansiyel (son 50)
         model, feat_cols, target_cols = load_arc_model()
         actual_vs_potential_last50_table(df, model, feat_cols, target_cols)
 
-        # ---- What-if
         st.markdown("---")
         st.markdown("### 🧪 What-if Simülasyonu (Arc Optimizer)")
 
@@ -1127,7 +1100,6 @@ def show_lab_simulation(sim_mode: bool):
 
     st.markdown("### 🔄 Veri Akışı Kontrolü")
 
-    # (widget key'leri LAB'e özel -> duplicate key yok)
     batch = st.slider("Akış hızı (şarj/adım)", 1, 500, SIM_STREAM_BATCH_DEFAULT, 1, key="lab_batch")
 
     c1, c2, c3 = st.columns([1.2, 1.2, 1.2])
@@ -1154,7 +1126,6 @@ def show_lab_simulation(sim_mode: bool):
     with b3:
         st.caption(f"Akış ilerleme: {int(st.session_state.sim_stream_progress)} / {SIM_STREAM_TOTAL}")
 
-    # Autostep: aynı progress’te tekrar etmesin
     if st.session_state.sim_stream_enabled and st.session_state.sim_stream_autostep:
         cur = int(st.session_state.sim_stream_progress)
         if st.session_state.sim_stream_last_step_progress != cur:
@@ -1172,8 +1143,7 @@ def show_lab_simulation(sim_mode: bool):
         st.table(summ)
 
     st.markdown("### Trend (Lab)")
-    # Lab’da serbest trend (çok metrik)
-    tmp = df.tail(24 * 7)  # daha kompakt
+    tmp = df.tail(24 * 7)
     use_cols = [c for c in ["kwh_per_t", "tap_temp_c", "electrode_kg_per_heat", "panel_delta_t_c", "o2_flow_nm3h", "slag_foaming_index"] if c in tmp.columns]
     if use_cols:
         long = tmp[["timestamp_dt"] + use_cols].melt("timestamp_dt", var_name="var", value_name="val").dropna()
@@ -1223,10 +1193,7 @@ def show_exec_page(sim_mode: bool):
 
     st.markdown("### 24h Trend + AI (sadece 2 metrik)")
     model, feat_cols, target_cols = load_arc_model()
-    # exec için sadece kWh/t + Elektrot (kg/t)
-    df2 = df.copy()
-    # chart fonksiyonu 3 metrik destekler, burada df’yi bırakıyoruz ama izlenecek kolonlar df’de var.
-    build_24h_actual_vs_ai_chart(df2, model, feat_cols, target_cols, height=320)
+    build_24h_actual_vs_ai_chart(df, model, feat_cols, target_cols, height=320)
 
     st.markdown("### Özet (Dağılım)")
     summ = distro_summary(df)
@@ -1335,7 +1302,6 @@ def show_operator_page(sim_mode: bool):
 
 # =========================================================
 # SIDEBAR: NAV + HIZLI SİM AKIŞ
-# - Lab sayfasında Hızlı Akış'ı göstermiyoruz (duplicate widget yok)
 # =========================================================
 def sidebar_controls():
     st.markdown("### FeCr AI")
@@ -1378,7 +1344,6 @@ def sidebar_controls():
 
     st.divider()
 
-    # Bu ekranda Lab seçiliyse, quick akış kontrolünü yalnızca Lab sayfasında göster.
     is_lab = (st.session_state.view_mode == "Persona" and st.session_state.persona == "Lab (Advanced)") or \
              (st.session_state.view_mode != "Persona" and st.session_state.classic_page == "Lab (Advanced)")
 
@@ -1387,7 +1352,6 @@ def sidebar_controls():
 
         batch = st.slider("Batch (şarj/adım)", 1, 500, SIM_STREAM_BATCH_DEFAULT, 1, key="sidebar_batch")
 
-        # sidebar widget key'leri benzersiz
         bind_toggle("9000 şarjı zamanla oku", "sim_stream_enabled", "sb_sim_stream_enabled")
         bind_toggle("Otomatik ilerlet", "sim_stream_autostep", "sb_sim_stream_autostep")
 
@@ -1403,7 +1367,6 @@ def sidebar_controls():
 
         st.caption(f"İlerleme: {int(st.session_state.sim_stream_progress)} / {SIM_STREAM_TOTAL}")
 
-        # Autostep: aynı progress’te tekrar etmesin
         if st.session_state.sim_stream_enabled and st.session_state.sim_stream_autostep:
             cur = int(st.session_state.sim_stream_progress)
             if st.session_state.sim_stream_last_step_progress != cur:
