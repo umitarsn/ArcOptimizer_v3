@@ -106,7 +106,15 @@ def bind_toggle(label: str, state_key: str, widget_key: str, help_text: str | No
     )
 
 
-def bind_slider_int(label: str, state_key: str, widget_key: str, min_v: int, max_v: int, step: int = 1, help_text: str | None = None):
+def bind_slider_int(
+    label: str,
+    state_key: str,
+    widget_key: str,
+    min_v: int,
+    max_v: int,
+    step: int = 1,
+    help_text: str | None = None,
+):
     def _sync():
         st.session_state[state_key] = int(st.session_state[widget_key])
 
@@ -122,7 +130,15 @@ def bind_slider_int(label: str, state_key: str, widget_key: str, min_v: int, max
     )
 
 
-def bind_number_int(label: str, state_key: str, widget_key: str, min_v: int, max_v: int, step: int = 1, help_text: str | None = None):
+def bind_number_int(
+    label: str,
+    state_key: str,
+    widget_key: str,
+    min_v: int,
+    max_v: int,
+    step: int = 1,
+    help_text: str | None = None,
+):
     def _sync():
         st.session_state[state_key] = int(st.session_state[widget_key])
 
