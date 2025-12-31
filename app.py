@@ -658,6 +658,7 @@ def actual_vs_potential_last50_table(df: pd.DataFrame, model, feat_cols, target_
         return
 
     tail = df.tail(50).copy()
+
     def m(col, default=np.nan):
         if col not in tail.columns:
             return default
@@ -920,59 +921,102 @@ def show_arc_optimizer_page(sim_mode: bool):
         st.info("Önce veri oluşturun (simülasyon veya canlı kayıt).")
         return
 
+    # KPI + model
     kpi = kpi_pack(df)
     last = kpi["last"]
+    model, feat_cols, target_cols = load_arc_model()
 
+    # =========================================================
+    # 1) ÜST: PROSES TRENDİ (24s) + AI Tahmin (TAM GENİŞLİK)
+    # =========================================================
+    st.markdown("### Proses Trendi (24 saat) + AI Tahmin (sağ taraf)")
+    build_24h_actual_vs_ai_chart(df, model, feat_cols, target_cols, height=420)
+
+    st.divider()
+
+    # =========================================================
+    # 2) KPI ŞERİDİ (4 METRİK YAN YANA)
+    # =========================================================
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Son Şarj kWh/t", f"{float(last.get('kwh_per_t')):.1f}" if pd.notna(last.get("kwh_per_t")) else "-")
     c2.metric("Son Şarj Elektrot", f"{float(last.get('electrode_kg_per_heat')):.2f} kg/şarj" if pd.notna(last.get("electrode_kg_per_heat")) else "-")
     c3.metric("Son Tap Sıcaklığı", f"{float(last.get('tap_temp_c')):.0f} °C" if pd.notna(last.get("tap_temp_c")) else "-")
     c4.metric("Son 10 Şarj Ort. kWh/t", f"{kpi['avg_kwh_t_10']:.1f}" if not np.isnan(kpi["avg_kwh_t_10"]) else "-")
 
-    left, right = st.columns([3, 2])
+    st.markdown("")
 
-    with left:
-        st.markdown("### 🎛️ Operasyon Paneli")
+    # =========================================================
+    # 3) ORTA: SOL TABLO (Aktüel vs Potansiyel) + SAĞ KAZANÇ
+    # =========================================================
+    left_mid, right_mid = st.columns([3.2, 1.2])
+    with left_mid:
+        actual_vs_potential_last50_table(df, model, feat_cols, target_cols)
 
-        # ✅ KALDIRILDI:
-        # st.markdown("#### 📌 Özet (Dağılım + Son 3 Ortalama)")
-        # summ = distro_summary(df)
-        # if summ.empty:
-        #     st.info("Özet için en az birkaç dolu kayıt gerekir.")
-        # else:
-        #     st.table(summ)
+    with right_mid:
+        st.markdown("### 💰 Proses Kazanç (Ton Başına)")
+        m = money_pack(df)
+        st.metric("Tahmini €/t (kaba)", f"{m['eur_per_t']:.2f}")
+        st.metric("Tahmini €/yıl (kaba)", f"{m['eur_per_year']:,.0f}")
 
-        st.markdown("#### 🚨 Proses Durumu / Alarmlar")
-        alarms = []
+    st.markdown("")
+    st.divider()
 
-        if "kwh_per_t" in df.columns and df["kwh_per_t"].notna().sum() >= 10 and pd.notna(last.get("kwh_per_t")):
-            ref = df["kwh_per_t"].dropna().tail(10).mean()
-            if float(last["kwh_per_t"]) > ref * 1.05:
-                alarms.append("⚡ kWh/t son 10 ortalamasına göre yüksek (+5%)")
+    # =========================================================
+    # 4) ALT: SOLDA WHAT-IF, SAĞDA AI MODEL / EĞİTİM MODU
+    # =========================================================
+    left_bot, right_bot = st.columns([3.0, 1.6])
 
-        if "tap_temp_c" in df.columns and df["tap_temp_c"].notna().sum() >= 10 and pd.notna(last.get("tap_temp_c")):
-            refT = df["tap_temp_c"].dropna().tail(10).mean()
-            if abs(float(last["tap_temp_c"]) - float(refT)) > 15:
-                alarms.append("🔥 Tap sıcaklığı sapması > 15°C")
+    with left_bot:
+        st.markdown("### 🧪 What-if Simülasyonu (Arc Optimizer)")
 
-        if pd.notna(last.get("panel_delta_t_c")) and float(last.get("panel_delta_t_c")) > 25:
-            alarms.append("💧 Panel ΔT yüksek (>25°C)")
-
-        if last.get("slag_foaming_index") is not None and pd.notna(last.get("slag_foaming_index")):
-            if float(last["slag_foaming_index"]) >= 9:
-                alarms.append("🌋 Slag foaming aşırı (≥9)")
-
-        if alarms:
-            for a in alarms:
-                st.warning(a)
+        if model is None or feat_cols is None:
+            st.info("What-if için önce modeli eğitin (en az ~20 şarj).")
         else:
-            st.success("✅ Proses stabil – belirgin alarm yok")
+            last_row = df.iloc[-1]
 
-        st.markdown("### Proses Trendi (24 saat) + AI Tahmin (sağ taraf)")
-        model, feat_cols, target_cols = load_arc_model()
-        build_24h_actual_vs_ai_chart(df, model, feat_cols, target_cols, height=420)
+            def num_input(name, col, min_v, max_v, step, fmt="%.1f"):
+                raw = last_row.get(col, (min_v + max_v) / 2)
+                try:
+                    v = float(raw)
+                except Exception:
+                    v = float((min_v + max_v) / 2)
+                v = max(min_v, min(v, max_v))
+                return st.number_input(name, min_v, max_v, v, step=step, format=fmt, key=f"whatif_{col}")
 
-    with right:
+            w1, w2 = st.columns(2)
+            with w1:
+                tap_weight = num_input("Tap Weight (t)", "tap_weight_t", 20.0, 60.0, 0.5)
+                duration = num_input("Süre (dk)", "duration_min", 30.0, 90.0, 1.0, "%.0f")
+                energy = num_input("Enerji (kWh)", "energy_kwh", 500.0, 30000.0, 50.0)
+                o2_flow = num_input("O2 (Nm³/h)", "o2_flow_nm3h", 300.0, 3000.0, 10.0)
+            with w2:
+                slag = num_input("Slag Foaming (0–10)", "slag_foaming_index", 0.0, 10.0, 0.5)
+                panel_dT = num_input("Panel ΔT (°C)", "panel_delta_t_c", 0.0, 60.0, 0.5)
+                elec = num_input("Elektrot (kg/şarj)", "electrode_kg_per_heat", 0.5, 6.0, 0.05)
+
+            if st.button("Simülasyonu Çalıştır", key="btn_run_whatif"):
+                inp = {
+                    "tap_weight_t": tap_weight,
+                    "duration_min": duration,
+                    "energy_kwh": energy,
+                    "o2_flow_nm3h": o2_flow,
+                    "slag_foaming_index": slag,
+                    "panel_delta_t_c": panel_dT,
+                    "electrode_kg_per_heat": elec,
+                }
+                row_df = pd.DataFrame([inp])[feat_cols].fillna(0.0)
+                try:
+                    preds = model.predict(row_df)[0]
+                    pred_dict = dict(zip(target_cols, preds))
+                    kwh_pred = float(pred_dict.get("kwh_per_t", float("nan")))
+                    tap_pred = float(pred_dict.get("tap_temp_c", float("nan")))
+                    r1, r2 = st.columns(2)
+                    r1.metric("AI kWh/t", f"{kwh_pred:.1f}" if np.isfinite(kwh_pred) else "-")
+                    r2.metric("AI Tap T", f"{tap_pred:.0f} °C" if np.isfinite(tap_pred) else "-")
+                except Exception as e:
+                    st.error(f"Tahmin hatası: {e}")
+
+    with right_bot:
         st.markdown("### 🤖 AI Model / Eğitim Modu")
 
         train_mode = st.radio(
@@ -1024,65 +1068,6 @@ def show_arc_optimizer_page(sim_mode: bool):
                 f"Veri sayısı: {st.session_state.model_last_train_rows} · "
                 f"Toplam eğitim: {st.session_state.model_train_count}"
             )
-
-        model, feat_cols, target_cols = load_arc_model()
-        actual_vs_potential_last50_table(df, model, feat_cols, target_cols)
-
-        st.markdown("---")
-        st.markdown("### 🧪 What-if Simülasyonu (Arc Optimizer)")
-
-        if model is None or feat_cols is None:
-            st.info("What-if için önce modeli eğitin (en az ~20 şarj).")
-        else:
-            last_row = df.iloc[-1]
-
-            def num_input(name, col, min_v, max_v, step, fmt="%.1f"):
-                raw = last_row.get(col, (min_v + max_v) / 2)
-                try:
-                    v = float(raw)
-                except Exception:
-                    v = float((min_v + max_v) / 2)
-                v = max(min_v, min(v, max_v))
-                return st.number_input(name, min_v, max_v, v, step=step, format=fmt, key=f"whatif_{col}")
-
-            w1, w2 = st.columns(2)
-            with w1:
-                tap_weight = num_input("Tap Weight (t)", "tap_weight_t", 20.0, 60.0, 0.5)
-                duration = num_input("Süre (dk)", "duration_min", 30.0, 90.0, 1.0, "%.0f")
-                energy = num_input("Enerji (kWh)", "energy_kwh", 500.0, 30000.0, 50.0)
-                o2_flow = num_input("O2 (Nm³/h)", "o2_flow_nm3h", 300.0, 3000.0, 10.0)
-            with w2:
-                slag = num_input("Slag Foaming (0–10)", "slag_foaming_index", 0.0, 10.0, 0.5)
-                panel_dT = num_input("Panel ΔT (°C)", "panel_delta_t_c", 0.0, 60.0, 0.5)
-                elec = num_input("Elektrot (kg/şarj)", "electrode_kg_per_heat", 0.5, 6.0, 0.05)
-
-            if st.button("Simülasyonu Çalıştır", key="btn_run_whatif"):
-                inp = {
-                    "tap_weight_t": tap_weight,
-                    "duration_min": duration,
-                    "energy_kwh": energy,
-                    "o2_flow_nm3h": o2_flow,
-                    "slag_foaming_index": slag,
-                    "panel_delta_t_c": panel_dT,
-                    "electrode_kg_per_heat": elec,
-                }
-                row_df = pd.DataFrame([inp])[feat_cols].fillna(0.0)
-                try:
-                    preds = model.predict(row_df)[0]
-                    pred_dict = dict(zip(target_cols, preds))
-                    kwh_pred = float(pred_dict.get("kwh_per_t", float("nan")))
-                    tap_pred = float(pred_dict.get("tap_temp_c", float("nan")))
-                    r1, r2 = st.columns(2)
-                    r1.metric("AI kWh/t", f"{kwh_pred:.1f}" if np.isfinite(kwh_pred) else "-")
-                    r2.metric("AI Tap T", f"{tap_pred:.0f} °C" if np.isfinite(tap_pred) else "-")
-                except Exception as e:
-                    st.error(f"Tahmin hatası: {e}")
-
-        st.markdown("---")
-        st.markdown("### 💰 Proses Kazanç (Ton Başına)")
-        m = money_pack(df)
-        st.metric("Tahmini €/t (kaba)", f"{m['eur_per_t']:.2f}")
-        st.metric("Tahmini €/yıl (kaba)", f"{m['eur_per_year']:,.0f}")
 
 
 # =========================================================
