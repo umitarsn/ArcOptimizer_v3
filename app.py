@@ -171,7 +171,7 @@ def load_runtime_data():
     if os.path.exists(RUNTIME_SAVE_PATH):
         try:
             with open(RUNTIME_SAVE_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
+                data = json.load(f)
             if isinstance(data, list):
                 return data
         except Exception:
@@ -473,7 +473,7 @@ def distro_summary(df: pd.DataFrame):
 
 
 # =========================================================
-# 24H + AI TAHMİN GRAFİĞİ
+# 24H + AI TAHMİN GRAFİĞİ (kırmızı kesikli döküm çizgisi + üstte yazılar)
 # =========================================================
 def build_24h_actual_vs_ai_chart(
     df: pd.DataFrame,
@@ -622,7 +622,7 @@ def build_24h_actual_vs_ai_chart(
     now_df = pd.DataFrame({"timestamp_dt": [last_time]})
     now_rule = alt.Chart(now_df).mark_rule(strokeDash=[2, 2]).encode(x="timestamp_dt:T")
 
-    # ✅ Tahmini döküm anı: KIRMIZI kesikli çizgi
+    # ✅ Tahmini döküm anı: KIRMIZI kesikli çizgi (dikey)
     tap_df = pd.DataFrame({"timestamp_dt": [future_end]})
     tap_rule_red = alt.Chart(tap_df).mark_rule(strokeDash=[6, 4], color="red").encode(x="timestamp_dt:T")
 
@@ -636,6 +636,7 @@ def build_24h_actual_vs_ai_chart(
 
     # =========================================================
     # ✅ SAĞ ÜST OK + ÜZERİNDE TEXTLER (ÇAKIŞMA YOK)
+    #   Yazıları grafiğin üst bandına "pixel" ile sabitliyoruz
     # =========================================================
     label_time = future_end.strftime("%d.%m %H:%M")
     label_temp = f"{tap_point_val:.0f} °C" if np.isfinite(tap_point_val) else "-"
@@ -693,6 +694,7 @@ def build_24h_actual_vs_ai_chart(
 
 
 def actual_vs_potential_last50_table(df: pd.DataFrame, model, feat_cols, target_cols):
+    """3 metrik için: Son 50 aktüel ortalama vs AI potansiyel (demo)."""
     if df.empty:
         return
 
@@ -957,11 +959,13 @@ def show_arc_optimizer_page(sim_mode: bool):
     last = kpi["last"]
     model, feat_cols, target_cols = load_arc_model()
 
+    # 1) Grafik (üstte)
     st.markdown("### Proses Trendi (24 saat) + AI Tahmin (sağ taraf)")
     build_24h_actual_vs_ai_chart(df, model, feat_cols, target_cols, height=420)
 
     st.divider()
 
+    # 2) KPI bandı (grafik altı)
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Son Şarj kWh/t", f"{float(last.get('kwh_per_t')):.1f}" if pd.notna(last.get("kwh_per_t")) else "-")
     c2.metric("Son Şarj Elektrot", f"{float(last.get('electrode_kg_per_heat')):.2f} kg/şarj" if pd.notna(last.get("electrode_kg_per_heat")) else "-")
@@ -970,6 +974,7 @@ def show_arc_optimizer_page(sim_mode: bool):
 
     st.markdown("")
 
+    # 3) Orta bant: sol tablo / sağ kazanç
     left_mid, right_mid = st.columns([3.2, 1.2])
     with left_mid:
         actual_vs_potential_last50_table(df, model, feat_cols, target_cols)
@@ -982,6 +987,7 @@ def show_arc_optimizer_page(sim_mode: bool):
 
     st.divider()
 
+    # 4) Alt bant: sol what-if / sağ eğitim
     left_bot, right_bot = st.columns([3.0, 1.6])
 
     with left_bot:
