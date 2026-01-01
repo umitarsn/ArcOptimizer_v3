@@ -171,7 +171,7 @@ def load_runtime_data():
     if os.path.exists(RUNTIME_SAVE_PATH):
         try:
             with open(RUNTIME_SAVE_PATH, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            data = json.load(f)
             if isinstance(data, list):
                 return data
         except Exception:
@@ -474,8 +474,6 @@ def distro_summary(df: pd.DataFrame):
 
 # =========================================================
 # 24H + AI TAHMİN GRAFİĞİ
-# - Aktüel/Potansiyel yazıları sağ üstte "ok" üzerinde
-# - Tahmini döküm anı: KIRMIZI kesikli dik çizgi
 # =========================================================
 def build_24h_actual_vs_ai_chart(
     df: pd.DataFrame,
@@ -518,7 +516,6 @@ def build_24h_actual_vs_ai_chart(
         "tap_temp_c": "Tap T (°C)",
     }
 
-    # sağ tarafta AI hedef penceresi (4 saat)
     future_h = 4
     future_end = last_time + timedelta(hours=future_h)
 
@@ -537,7 +534,6 @@ def build_24h_actual_vs_ai_chart(
     target_elec = max(base_elec - 0.002, 0.0)
     target_tap = base_tap + 5.0
 
-    # model varsa: kwh/t ve tap T tahmini
     if model is not None and feat_cols is not None and target_cols is not None:
         feat_defaults = {}
         for c in feat_cols:
@@ -563,7 +559,6 @@ def build_24h_actual_vs_ai_chart(
         except Exception:
             pass
 
-    # actual long
     actual = df_24[["timestamp_dt"] + keep].melt("timestamp_dt", var_name="var", value_name="val").dropna()
     actual["type"] = "Aktüel"
     actual["var_name"] = actual["var"].map(var_map).fillna(actual["var"])
@@ -578,7 +573,6 @@ def build_24h_actual_vs_ai_chart(
     last_elec = get_last_val("electrode_kg_per_t", base_elec)
     last_tap = get_last_val("tap_temp_c", base_tap)
 
-    # future interpolation (kesikli)
     future_points = []
     steps = 8
     for i in range(steps + 1):
@@ -603,7 +597,6 @@ def build_24h_actual_vs_ai_chart(
     domain_min = window_start
     domain_max = future_end
 
-    # çizgi grafiği
     base_chart = (
         alt.Chart(combined)
         .mark_line()
@@ -619,7 +612,6 @@ def build_24h_actual_vs_ai_chart(
             strokeDash=alt.StrokeDash(
                 "type:N",
                 title=None,
-                # legend kapatılıyor -> sağ üstte custom yazı koyacağız
                 legend=None,
                 scale=alt.Scale(domain=["Aktüel", "Potansiyel (AI)"], range=[[1, 0], [6, 4]]),
             ),
@@ -627,30 +619,24 @@ def build_24h_actual_vs_ai_chart(
         .properties(height=height)
     )
 
-    # now çizgisi (mevcut son ölçüm)
     now_df = pd.DataFrame({"timestamp_dt": [last_time]})
     now_rule = alt.Chart(now_df).mark_rule(strokeDash=[2, 2]).encode(x="timestamp_dt:T")
 
-    # ✅ Tahmini döküm anı: KIRMIZI kesikli çizgi (future_end)
+    # ✅ Tahmini döküm anı: KIRMIZI kesikli çizgi
     tap_df = pd.DataFrame({"timestamp_dt": [future_end]})
     tap_rule_red = alt.Chart(tap_df).mark_rule(strokeDash=[6, 4], color="red").encode(x="timestamp_dt:T")
 
-    # Tap hedef nokta (görseldeki gibi)
-    tap_point_time = future_end
     tap_point_val = float(future_df.iloc[-1].get("tap_temp_c", np.nan))
     layers = [base_chart, now_rule, tap_rule_red]
 
     if "tap_temp_c" in keep and np.isfinite(tap_point_val):
-        tp = pd.DataFrame({"timestamp_dt": [tap_point_time], "val": [tap_point_val]})
+        tp = pd.DataFrame({"timestamp_dt": [future_end], "val": [tap_point_val]})
         point = alt.Chart(tp).mark_point(size=120, filled=True).encode(x="timestamp_dt:T", y="val:Q")
         layers.append(point)
 
     # =========================================================
-    # ✅ SAĞ ÜST OK + ÜZERİNDE TEXTLER
-    # - "Aktüel" ve "Potansiyel (AI)"
-    # - "Hedef döküm zamanı" ve "Hedef döküm sıcaklığı"
+    # ✅ SAĞ ÜST OK + ÜZERİNDE TEXTLER (ÇAKIŞMA YOK)
     # =========================================================
-    # Not: y=alt.value(...) ile ekran pikseli bazlı üstte sabitlenir.
     label_time = future_end.strftime("%d.%m %H:%M")
     label_temp = f"{tap_point_val:.0f} °C" if np.isfinite(tap_point_val) else "-"
 
@@ -658,35 +644,40 @@ def build_24h_actual_vs_ai_chart(
 
     arrow = (
         alt.Chart(ann)
-        .mark_text(text="⬆", fontSize=20, fontWeight="bold")
+        .mark_text(text="⬆", fontSize=26, fontWeight="bold")
+        .encode(x="timestamp_dt:T", y=alt.value(10))
+    )
+
+    txt_a = (
+        alt.Chart(ann)
+        .mark_text(align="left", dx=22, fontSize=14, fontWeight="bold")
+        .encode(x="timestamp_dt:T", y=alt.value(34), text=alt.value("Aktüel"))
+    )
+
+    txt_p = (
+        alt.Chart(ann)
+        .mark_text(align="left", dx=22, fontSize=14, fontWeight="bold")
+        .encode(x="timestamp_dt:T", y=alt.value(56), text=alt.value("Potansiyel (AI)"))
+    )
+
+    txt_time = (
+        alt.Chart(ann)
+        .mark_text(align="left", dx=22, fontSize=13, fontWeight="bold")
         .encode(
             x="timestamp_dt:T",
-            y=alt.value(12),
+            y=alt.value(86),
+            text=alt.value(f"Hedef Döküm Zamanı (AI): {label_time}"),
         )
     )
 
-    # Aktüel / Potansiyel text (okun yanında)
-    txt_a = (
-        alt.Chart(ann)
-        .mark_text(align="left", dx=18, fontSize=12, fontWeight="bold")
-        .encode(x="timestamp_dt:T", y=alt.value(10), text=alt.value("Aktüel"))
-    )
-    txt_p = (
-        alt.Chart(ann)
-        .mark_text(align="left", dx=18, fontSize=12, fontWeight="bold")
-        .encode(x="timestamp_dt:T", y=alt.value(26), text=alt.value("Potansiyel (AI)"))
-    )
-
-    # Hedef döküm zamanı / sıcaklık (okun altında, görseldeki blok gibi)
-    txt_time = (
-        alt.Chart(ann)
-        .mark_text(align="left", dx=18, fontSize=12, fontWeight="bold")
-        .encode(x="timestamp_dt:T", y=alt.value(46), text=alt.value(f"Hedef Döküm Zamanı (AI): {label_time}"))
-    )
     txt_temp = (
         alt.Chart(ann)
-        .mark_text(align="left", dx=18, fontSize=12)
-        .encode(x="timestamp_dt:T", y=alt.value(64), text=alt.value(f"Hedef Döküm Sıcaklığı (AI): {label_temp}"))
+        .mark_text(align="left", dx=22, fontSize=13)
+        .encode(
+            x="timestamp_dt:T",
+            y=alt.value(108),
+            text=alt.value(f"Hedef Döküm Sıcaklığı (AI): {label_temp}"),
+        )
     )
 
     layers.extend([arrow, txt_a, txt_p, txt_time, txt_temp])
@@ -702,7 +693,6 @@ def build_24h_actual_vs_ai_chart(
 
 
 def actual_vs_potential_last50_table(df: pd.DataFrame, model, feat_cols, target_cols):
-    """3 metrik için: Son 50 aktüel ortalama vs AI potansiyel (demo)."""
     if df.empty:
         return
 
@@ -718,16 +708,9 @@ def actual_vs_potential_last50_table(df: pd.DataFrame, model, feat_cols, target_
     act_elec = m("electrode_kg_per_t", np.nan)
     act_tap = m("tap_temp_c", np.nan)
 
-    pot_kwh = np.nan
-    pot_elec = np.nan
-    pot_tap = np.nan
-
-    if np.isfinite(act_kwh):
-        pot_kwh = max(act_kwh - 5.0, 0.0)
-    if np.isfinite(act_elec):
-        pot_elec = max(act_elec - 0.002, 0.0)
-    if np.isfinite(act_tap):
-        pot_tap = act_tap + 5.0
+    pot_kwh = max(act_kwh - 5.0, 0.0) if np.isfinite(act_kwh) else np.nan
+    pot_elec = max(act_elec - 0.002, 0.0) if np.isfinite(act_elec) else np.nan
+    pot_tap = (act_tap + 5.0) if np.isfinite(act_tap) else np.nan
 
     if model is not None and feat_cols is not None and target_cols is not None and len(tail) >= 10:
         feat_defaults = {}
@@ -974,13 +957,11 @@ def show_arc_optimizer_page(sim_mode: bool):
     last = kpi["last"]
     model, feat_cols, target_cols = load_arc_model()
 
-    # 1) ÜST: Trend
     st.markdown("### Proses Trendi (24 saat) + AI Tahmin (sağ taraf)")
     build_24h_actual_vs_ai_chart(df, model, feat_cols, target_cols, height=420)
 
     st.divider()
 
-    # 2) KPI şeridi
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Son Şarj kWh/t", f"{float(last.get('kwh_per_t')):.1f}" if pd.notna(last.get("kwh_per_t")) else "-")
     c2.metric("Son Şarj Elektrot", f"{float(last.get('electrode_kg_per_heat')):.2f} kg/şarj" if pd.notna(last.get("electrode_kg_per_heat")) else "-")
@@ -989,7 +970,6 @@ def show_arc_optimizer_page(sim_mode: bool):
 
     st.markdown("")
 
-    # 3) Orta satır: sol tablo + sağ kazanç
     left_mid, right_mid = st.columns([3.2, 1.2])
     with left_mid:
         actual_vs_potential_last50_table(df, model, feat_cols, target_cols)
@@ -1002,7 +982,6 @@ def show_arc_optimizer_page(sim_mode: bool):
 
     st.divider()
 
-    # 4) Alt satır: sol what-if + sağ eğitim
     left_bot, right_bot = st.columns([3.0, 1.6])
 
     with left_bot:
