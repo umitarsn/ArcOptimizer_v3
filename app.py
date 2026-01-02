@@ -382,18 +382,10 @@ def to_df(data_source):
 
     df = pd.DataFrame(data_source).copy()
     if "timestamp" in df.columns:
-        # ✅ Türkiye saati: tz-aware ise TR'ye convert, tz-naive ise TR olarak localize et
         try:
-            ts = pd.to_datetime(df["timestamp"], errors="coerce")
-            if getattr(ts.dt, "tz", None) is None:
-                df["timestamp_dt"] = ts.dt.tz_localize(TZ)
-            else:
-                df["timestamp_dt"] = ts.dt.tz_convert(TZ)
+            df["timestamp_dt"] = pd.to_datetime(df["timestamp"], utc=True).dt.tz_convert(TZ)
         except Exception:
-            try:
-                df["timestamp_dt"] = pd.to_datetime(df["timestamp"], errors="coerce")
-            except Exception:
-                df["timestamp_dt"] = pd.NaT
+            df["timestamp_dt"] = pd.to_datetime(df["timestamp"], errors="coerce")
     else:
         df["timestamp_dt"] = pd.NaT
 
@@ -486,7 +478,7 @@ def distro_summary(df: pd.DataFrame):
 
 
 # =========================================================
-# 24H + AI TAHMİN GRAFİĞİ (OK DÖKÜM NOKTASININ ÜSTÜNDE, font 14–15)
+# 24H + AI TAHMİN GRAFİĞİ (YAZILAR ÜST SAĞDA, KIRMIZI DÖKÜM ÇİZGİSİ)
 # =========================================================
 def build_24h_actual_vs_ai_chart(
     df: pd.DataFrame,
@@ -612,36 +604,24 @@ def build_24h_actual_vs_ai_chart(
     domain_min = window_start
     domain_max = future_end
 
-    # ========= ✅ OK + BİLGİ (DÖKÜM NOKTASININ ÜSTÜNDE, font 14–15) =========
+    # ========= ✅ ÜST SAĞ BİLGİ BLOĞU (grafik DIŞI) =========
     tap_point_val = float(future_df.iloc[-1].get("tap_temp_c", np.nan))
     hedef_time_str = future_end.strftime("%d.%m %H:%M")
     hedef_temp_str = f"{tap_point_val:.0f} °C" if np.isfinite(tap_point_val) else "-"
 
-    label_text = (
-        "⬆  Aktüel\n"
-        "Potansiyel (AI)\n"
-        f"Hedef Döküm Zamanı (AI): {hedef_time_str}\n"
-        f"Hedef Döküm Sıcaklığı (AI): {hedef_temp_str}"
-    )
-
-    # label: x future_end'e sabit, y ekranda noktanın üstünde (pixel sabit) => bağımsız y scale sorun çıkarmaz
-    label_df = pd.DataFrame({"timestamp_dt": [future_end], "label": [label_text]})
-    label_layer = (
-        alt.Chart(label_df)
-        .mark_text(
-            align="left",
-            baseline="top",
-            dx=8,
-            dy=10,
-            fontSize=15,          # ✅ 14–15
-            fontWeight="bold",
-            lineBreak="\n",
-        )
-        .encode(
-            x=alt.X("timestamp_dt:T"),
-            y=alt.value(20),      # ✅ grafik içinde üst bölge (döküm çizgisinin üstünde)
-            text="label:N",
-        )
+    st.markdown(
+        f"""
+        <div style="display:flex; justify-content:flex-end; margin-top:2px; margin-bottom:6px;">
+          <div style="text-align:left; padding:6px 10px; border-radius:10px;">
+            <div style="font-size:22px; font-weight:800; line-height:1.05;">⬆</div>
+            <div style="font-size:18px; font-weight:800; line-height:1.2;">Aktüel</div>
+            <div style="font-size:18px; font-weight:800; line-height:1.2; margin-bottom:6px;">Potansiyel (AI)</div>
+            <div style="font-size:14px; font-weight:700; line-height:1.25;">Hedef Döküm Zamanı (AI): {hedef_time_str}</div>
+            <div style="font-size:14px; line-height:1.25;">Hedef Döküm Sıcaklığı (AI): {hedef_temp_str}</div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
     # ========= Grafik =========
@@ -674,7 +654,7 @@ def build_24h_actual_vs_ai_chart(
     fut_df = pd.DataFrame({"timestamp_dt": [future_end]})
     future_rule = alt.Chart(fut_df).mark_rule(strokeDash=[6, 4], color="red").encode(x="timestamp_dt:T")
 
-    layers = [base_chart, now_rule, future_rule, label_layer]
+    layers = [base_chart, now_rule, future_rule]
 
     # hedef tap noktası (grafikte kalsın)
     if "tap_temp_c" in keep and np.isfinite(tap_point_val):
