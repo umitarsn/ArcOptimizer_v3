@@ -1103,107 +1103,95 @@ def show_arc_optimizer_page(sim_mode: bool):
 # ✅ NEW: HSE Vision (Demo) — cv2 YOK (HTML overlay)
 # =========================================================
 def show_hse_vision_demo_page(sim_mode: bool):
-    st.markdown("## 🦺 HSE Vision (Demo) – Kamera / Görüntü")
-    st.caption("Pilot demoda gerçek CV entegrasyonu yerine simüle tespit akışı gösteriyoruz. (Video üstünde animasyonlu kırmızı kutu)")
+    st.markdown("## 🦺 HSE Vision (Demo) – Kamera & Risk Değerlendirme")
+    st.caption("Pilot demo – görüntü işleme simülasyonu + proses önsezisi")
 
-    st.markdown("### 🎥 Kamera / Görüntü (Demo)")
-    st.radio("Kaynak", ["Video (dosya)"], horizontal=True)
+    # =========================
+    # VIDEO YÜKLEME
+    # =========================
+    st.markdown("### 🎥 Kamera / Görüntü")
+    up = st.file_uploader("Video yükle (mp4 / mov)", type=["mp4", "mov", "m4v"])
 
-    up = st.file_uploader("Video yükle (mp4/mov)", type=["mp4", "mov", "m4v"])
     if not up:
-        st.info("Bir video yükleyince kişi tespiti demo olarak video üstünde kırmızı kutu ile gösterilecek.")
+        st.info("Demo videosu yükleyin.")
         return
 
-    video_bytes = up.read()
-    size_mb = len(video_bytes) / (1024 * 1024)
+    # =========================
+    # DAVRANIŞ / PPE (DEMO)
+    # =========================
+    st.markdown("### 👷 Davranış & PPE (Demo Kontrolleri)")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        kisi_yaklasiyor = st.toggle("Kişi riskli bölgeye yaklaşıyor", value=True)
+    with c2:
+        kisi_bolgede = st.toggle("Kişi riskli bölgede", value=True)
+    with c3:
+        baret_yok = st.toggle("Baret yok", value=False)
 
-    # Büyük videoda base64 gömme riskli -> normal st.video göster
-    if size_mb > 20:
-        st.warning(f"Video {size_mb:.1f}MB. Overlay demo için çok büyük; normal video gösteriyorum (overlay kapalı).")
-        st.video(video_bytes)
-    else:
-        # Base64 embed + CSS overlay (kırmızı kutu animasyonu)
-        mime = "video/mp4"
-        if up.name.lower().endswith(".mov"):
-            mime = "video/quicktime"
-        b64 = base64.b64encode(video_bytes).decode("utf-8")
+    # =========================
+    # RİSK HESABI (DEMO LOGIC)
+    # =========================
+    risk_tipi = "SLAG / SPLASH"
+    olasilik = 72 if kisi_bolgede else 15
+    tmin, tmax = (45, 90) if kisi_bolgede else (120, 180)
 
-        components.html(
-            f"""
-            <div style="position:relative; width:100%; max-width:980px; margin:0; padding:0;">
-              <video id="hsevid" controls autoplay muted loop
-                style="width:100%; border-radius:12px; display:block; background:#000;">
-                <source src="data:{mime};base64,{b64}" type="{mime}">
-              </video>
-
-              <!-- Kırmızı kutu overlay -->
-              <div id="bbox"
-                   style="position:absolute; left:10%; top:18%;
-                          width:18%; height:40%;
-                          border:4px solid #ff0000;
-                          border-radius:6px;
-                          box-sizing:border-box;
-                          pointer-events:none;
-                          animation: moveBox 4.5s ease-in-out infinite;">
-              </div>
-
-              <!-- Etiket -->
-              <div id="label"
-                   style="position:absolute; left:10%; top:14%;
-                          color:#ff0000; font-weight:800; font-size:18px;
-                          text-shadow:0 0 6px rgba(0,0,0,0.6);
-                          pointer-events:none;
-                          animation: moveLabel 4.5s ease-in-out infinite;">
-                PERSON
-              </div>
-            </div>
-
-            <style>
-              @keyframes moveBox {{
-                0%   {{ left:10%; top:18%; width:18%; height:40%; }}
-                35%  {{ left:40%; top:22%; width:16%; height:42%; }}
-                70%  {{ left:62%; top:20%; width:17%; height:41%; }}
-                100% {{ left:10%; top:18%; width:18%; height:40%; }}
-              }}
-              @keyframes moveLabel {{
-                0%   {{ left:10%; top:14%; }}
-                35%  {{ left:40%; top:18%; }}
-                70%  {{ left:62%; top:16%; }}
-                100% {{ left:10%; top:14%; }}
-              }}
-            </style>
-            """,
-            height=560,
+    if kisi_bolgede and olasilik >= 60:
+        durum = "🔴 KRİTİK"
+        sorun_metni = (
+            "Slag / splash riski yüksek.\n"
+            "Riskli bölgede personel tespit edildi.\n"
+            "Derhal alanın boşaltılması gerekiyor."
         )
-
-    st.markdown("---")
-    st.markdown("### 👷 Davranış / PPE Tespiti (Demo Kontrolleri)")
-    st.caption("Pilot demoda gerçek CV entegrasyonu yerine simüle tespit ile akışı gösteriyoruz.")
-
-    a, b, c = st.columns(3)
-    with a:
-        near = st.toggle("Kişi riskli bölgeye yaklaşıyor", value=True, key="hse_near")
-    with b:
-        inzone = st.toggle("Kişi riskli bölgede", value=True, key="hse_inzone")
-    with c:
-        nohelmet = st.toggle("Baret yok", value=True, key="hse_nohelmet")
-
-    st.markdown("### 🧠 Birleşik Karar")
-    # Demo sabit değerler (istersen sonrasında prosesten türetiriz)
-    risk_type = "SLAG / SPLASH"
-    prob = 2
-    tmin, tmax = 104, 149
-
-    if inzone or nohelmet or near:
-        st.warning("🟡 Dikkat (davranış)")
+        alarm = True
+    elif kisi_yaklasiyor or baret_yok:
+        durum = "🟡 DİKKAT"
+        sorun_metni = (
+            "Personel riskli bölgeye yaklaşıyor "
+            "veya PPE uygunsuzluğu mevcut."
+        )
+        alarm = False
     else:
-        st.success("✅ Normal")
+        durum = "🟢 NORMAL"
+        sorun_metni = None
+        alarm = False
 
-    st.write(f"• **RİSK TİPİ:** {risk_type}")
-    st.write(f"• **Olasılık:** %{prob}")
-    st.write(f"• **Tahmini süre:** {tmin}–{tmax} sn")
-    st.write(f"• **Durum:** {'Kişi riskli bölgede' if inzone else ('Yaklaşıyor' if near else 'Normal')}")
+    # =========================
+    # LAYOUT: VIDEO | RİSK TABLOSU
+    # =========================
+    left, right = st.columns([2.2, 1.3])
 
+    with left:
+        st.video(up)
+
+    with right:
+        st.markdown("### 📊 Risk Değerlendirme")
+        st.table([
+            {"Parametre": "Risk Tipi", "Değer": risk_tipi},
+            {"Parametre": "Olasılık", "Değer": f"%{olasilik}"},
+            {"Parametre": "Tahmini Süre", "Değer": f"{tmin}–{tmax} sn"},
+            {"Parametre": "Durum", "Değer": durum},
+        ])
+
+    # =========================
+    # SORUN & ALARM
+    # =========================
+    st.markdown("---")
+
+    if sorun_metni:
+        st.error(f"⚠️ **TESPİT EDİLEN SORUN**\n\n{sorun_metni}")
+
+        if alarm:
+            components.html(
+                """
+                <audio autoplay>
+                  <source src="https://actions.google.com/sounds/v1/alarms/alarm_clock.ogg" type="audio/ogg">
+                </audio>
+                """,
+                height=0,
+            )
+            st.warning("🔊 ALARM AKTİF – KRİTİK İSG RİSKİ")
+    else:
+        st.success("✅ Aktif bir güvenlik riski tespit edilmedi.")
 
 # =========================================================
 # LAB – Simülasyon / Adhoc (İleri seviye)
