@@ -1108,10 +1108,10 @@ def show_arc_optimizer_page(sim_mode: bool):
 # =========================================================
 def show_hse_vision_demo_page(sim_mode: bool):
     st.markdown("## 🦺 HSE Vision (Demo) – Kamera & Risk Değerlendirme")
-    st.caption("Pilot demo – görüntü işleme simülasyonu + proses önsezisi")
+    st.caption("Pilot demo – görüntü işleme simülasyonu + proses önsezisi (PoC)")
 
     # =========================
-    # VIDEO YÜKLE (persist)
+    # VIDEO (persist)
     # =========================
     st.markdown("### 🎥 Kamera / Görüntü")
     up = st.file_uploader("Video yükle (mp4 / mov)", type=["mp4", "mov", "m4v"])
@@ -1125,12 +1125,11 @@ def show_hse_vision_demo_page(sim_mode: bool):
         st.info("Demo videosu yükleyin. (Yükledikten sonra sayfa yenilense bile kalır.)")
         return
 
-    # autoplay için base64 video
     b64 = base64.b64encode(st.session_state.hse_video_bytes).decode("utf-8")
     mime = st.session_state.get("hse_video_mime") or "video/mp4"
 
     # =========================
-    # RİSK TİPLERİ
+    # RİSK TİPLERİ + DEMO TETİKLER
     # =========================
     RISK_TYPES = [
         "SLAG / SPLASH",
@@ -1144,7 +1143,7 @@ def show_hse_vision_demo_page(sim_mode: bool):
     ]
 
     st.markdown("### 👷 Davranış & PPE (Demo Kontrolleri)")
-    c0, c1, c2, c3 = st.columns([1.4, 1, 1, 1])
+    c0, c1, c2, c3 = st.columns([1.5, 1, 1, 1])
     with c0:
         risk_tipi = st.selectbox("Risk tipi", RISK_TYPES, index=0)
     with c1:
@@ -1153,6 +1152,197 @@ def show_hse_vision_demo_page(sim_mode: bool):
         kisi_bolgede = st.toggle("Kişi riskli bölgede", value=True)
     with c3:
         baret_yok = st.toggle("Baret yok", value=False)
+
+    # =========================
+    # GENEL RİSK SKORU (0–100) + Olasılık/Süre (demo mantığı)
+    # =========================
+    # Risk tipi baz ağırlık
+    type_weight = {
+        "SLAG / SPLASH": 25,
+        "Yük altında çalışma": 30,
+        "Sabitlenmemiş yük / düşen parça": 28,
+        "Baretsiz giriş": 18,
+        "Yetkisiz riskli bölgeye giriş": 22,
+        "Sıcak yüzey / yanık riski": 20,
+        "Forklift–yaya yakınlaşma": 28,
+        "LOTO / enerji izolasyonu ihlali": 26,
+    }.get(risk_tipi, 20)
+
+    # Tetik ağırlıkları
+    score = 10 + type_weight
+    if kisi_yaklasiyor:
+        score += 15
+    if kisi_bolgede:
+        score += 35
+    if baret_yok:
+        score += 20
+
+    # clamp
+    score = int(max(0, min(100, score)))
+
+    # Olasılık (skordan türet) – demo
+    olasilik = int(max(1, min(99, round(score * 0.9))))
+
+    # Tahmini süre – demo
+    if kisi_bolgede:
+        tmin, tmax = (45, 90)
+    elif kisi_yaklasiyor:
+        tmin, tmax = (90, 150)
+    else:
+        tmin, tmax = (120, 200)
+
+    # Durum / eşikler
+    if score >= 75:
+        durum = "🔴 KRİTİK"
+        alarm = True
+        sorun_metni = (
+            f"{risk_tipi} riski yüksek.\n"
+            f"Genel HSE skor: {score}/100.\n"
+            "Personel riskli alanda / yakınında.\n"
+            "Derhal alanın boşaltılması + bariyer kontrolü önerilir."
+        )
+    elif score >= 50:
+        durum = "🟡 DİKKAT"
+        alarm = False
+        sorun_metni = (
+            f"Olası risk: {risk_tipi}.\n"
+            f"Genel HSE skor: {score}/100.\n"
+            "Yaklaşım / PPE uygunsuzluğu izleniyor."
+        )
+    else:
+        durum = "🟢 NORMAL"
+        alarm = False
+        sorun_metni = None
+
+    # =========================
+    # AI TAHMİN: şimdi → +15dk (kesikli)
+    # =========================
+    horizon_min = 15
+    step = 1  # dk
+
+    now = datetime.now(TZ)
+
+    # Basit öngörü mantığı (demo):
+    # - Eğer kişi riskli bölgede ise risk artma eğiliminde
+    # - Sadece yaklaşıyorsa yavaş artar
+    # - Hiçbiri yoksa düşer
+    if kisi_bolgede:
+        drift = +2.4
+    elif kisi_yaklasiyor or baret_yok:
+        drift = +1.2
+    else:
+        drift = -1.8
+
+    # "Aktüel" (son 6 dk) — kullanıcıya “trend” hissi verir
+    actual_points = []
+    for i in range(6, -1, -1):
+        t = now - timedelta(minutes=i)
+        # Aktüel: bugünkü skoru hafif dalgalandır
+        v = score - int(0.6 * i) + (1 if (i % 3 == 0) else 0)
+        v = int(max(0, min(100, v)))
+        actual_points.append({"ts": t, "risk": v, "type": "Aktüel"})
+
+    # "Potansiyel (AI)" — şimdi sonrası
+    future_points = []
+    v = float(score)
+    for m in range(0, horizon_min + 1, step):
+        t = now + timedelta(minutes=m)
+        v = v + drift  # demo drift
+        # sınırla ve çok uçmasın diye yumuşat
+        v = max(0.0, min(100.0, v))
+        future_points.append({"ts": t, "risk": float(v), "type": "Potansiyel (AI)"})
+
+    risk_df = pd.DataFrame(actual_points + future_points).copy()
+
+    # Kritik eşik zamanı (ilk geçtiği an)
+    critical_threshold = 75
+    crit_time = None
+    for row in future_points:
+        if row["risk"] >= critical_threshold:
+            crit_time = row["ts"]
+            break
+
+    # =========================
+    # LAYOUT: VIDEO | PANEL
+    # =========================
+    left, right = st.columns([2.2, 1.3])
+
+    with left:
+        # Autoplay: muted gerekli (özellikle iOS/Chrome)
+        components.html(
+            f"""
+            <video autoplay muted loop controls playsinline
+                   style="width:100%; border-radius:14px; background:#000;">
+              <source src="data:{mime};base64,{b64}" type="{mime}">
+            </video>
+            """,
+            height=520,
+        )
+
+    with right:
+        st.markdown("### 🧠 Genel HSE Risk Skoru")
+        st.metric("Risk Skoru (0–100)", f"{score}", help="PoC: Risk tipi + bölge + PPE + davranış tetiklerinden türetilen birleşik skor.")
+        st.caption("Aktüel (son dakikalar) + AI tahmini (şimdiden sonra)")
+
+        # Trend grafiği (ArcOptimizer hissi)
+        ch = (
+            alt.Chart(risk_df)
+            .mark_line()
+            .encode(
+                x=alt.X("ts:T", title="Zaman", axis=alt.Axis(format="%H:%M", labelAngle=-25)),
+                y=alt.Y("risk:Q", title="Risk Skoru", scale=alt.Scale(domain=[0, 100])),
+                strokeDash=alt.StrokeDash(
+                    "type:N",
+                    title=None,
+                    scale=alt.Scale(domain=["Aktüel", "Potansiyel (AI)"], range=[[1, 0], [6, 4]]),
+                ),
+            )
+            .properties(height=180)
+        )
+
+        layers = [ch]
+
+        # kritik eşik çizgisi (yatay)
+        thr_df = pd.DataFrame({"y": [critical_threshold]})
+        thr = alt.Chart(thr_df).mark_rule(strokeDash=[4, 4], color="red").encode(y="y:Q")
+        layers.append(thr)
+
+        # kritik zaman çizgisi (dikey)
+        if crit_time is not None:
+            ct = pd.DataFrame({"ts": [crit_time]})
+            ct_rule = alt.Chart(ct).mark_rule(strokeDash=[6, 4], color="red").encode(x="ts:T")
+            layers.append(ct_rule)
+            st.caption(f"⏱️ Tahmini kritik eşik zamanı: **{crit_time.strftime('%H:%M')}**")
+
+        st.altair_chart(alt.layer(*layers), use_container_width=True)
+
+        st.markdown("### 📊 Risk Değerlendirme")
+        st.table([
+            {"Parametre": "Risk Tipi", "Değer": risk_tipi},
+            {"Parametre": "Olasılık", "Değer": f"%{olasilik}"},
+            {"Parametre": "Tahmini Süre", "Değer": f"{tmin}–{tmax} sn"},
+            {"Parametre": "Durum", "Değer": durum},
+        ])
+
+    # =========================
+    # SORUN & ALARM
+    # =========================
+    st.markdown("---")
+    if sorun_metni:
+        st.error(f"⚠️ **TESPİT EDİLEN SORUN**\n\n{sorun_metni}")
+
+        if alarm:
+            components.html(
+                """
+                <audio autoplay>
+                  <source src="https://actions.google.com/sounds/v1/alarms/alarm_clock.ogg" type="audio/ogg">
+                </audio>
+                """,
+                height=0,
+            )
+            st.warning("🔊 ALARM AKTİF – KRİTİK İSG RİSKİ")
+    else:
+        st.success("✅ Aktif bir güvenlik riski tespit edilmedi.")
 
     # =========================
     # DEMO RİSK HESABI (basit & anlaşılır)
