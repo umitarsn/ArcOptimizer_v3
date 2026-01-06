@@ -2,6 +2,7 @@
 import os
 import json
 import random
+import base64
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from typing import Optional, Tuple, Dict, Any, List
@@ -13,10 +14,6 @@ import streamlit as st
 from sklearn.ensemble import RandomForestRegressor
 import joblib
 import streamlit.components.v1 as components
-
-# ✅ HSE Vision (Demo) için eklendi
-import tempfile
-import cv2
 
 
 # =========================================================
@@ -482,7 +479,7 @@ def distro_summary(df: pd.DataFrame):
 
 
 # =========================================================
-# 24H + AI TAHMİN GRAFİĞİ (YAZILAR ÜST SAĞDA, KIRMIZI DÖKÜM ÇİZGİSİ)
+# 24H + AI TAHMİN GRAFİĞİ
 # =========================================================
 def build_24h_actual_vs_ai_chart(
     df: pd.DataFrame,
@@ -543,7 +540,6 @@ def build_24h_actual_vs_ai_chart(
     target_elec = max(base_elec - 0.002, 0.0)
     target_tap = base_tap + 5.0
 
-    # model varsa hedefleri modelden çek
     if model is not None and feat_cols is not None and target_cols is not None:
         feat_defaults = {}
         for c in feat_cols:
@@ -583,7 +579,6 @@ def build_24h_actual_vs_ai_chart(
     last_elec = get_last_val("electrode_kg_per_t", base_elec)
     last_tap = get_last_val("tap_temp_c", base_tap)
 
-    # future: last -> target lineer
     future_points = []
     steps = 8
     for i in range(steps + 1):
@@ -608,7 +603,6 @@ def build_24h_actual_vs_ai_chart(
     domain_min = window_start
     domain_max = future_end
 
-    # ========= ✅ ÜST SAĞ BİLGİ BLOĞU (grafik DIŞI) =========
     tap_point_val = float(future_df.iloc[-1].get("tap_temp_c", np.nan))
     hedef_time_str = future_end.strftime("%d.%m %H:%M")
     hedef_temp_str = f"{tap_point_val:.0f} °C" if np.isfinite(tap_point_val) else "-"
@@ -628,7 +622,6 @@ def build_24h_actual_vs_ai_chart(
         unsafe_allow_html=True,
     )
 
-    # ========= Grafik =========
     base_chart = (
         alt.Chart(combined)
         .mark_line()
@@ -650,17 +643,14 @@ def build_24h_actual_vs_ai_chart(
         .properties(height=height)
     )
 
-    # now çizgisi (siyah kesikli)
     now_df = pd.DataFrame({"timestamp_dt": [last_time]})
     now_rule = alt.Chart(now_df).mark_rule(strokeDash=[2, 2], color="black").encode(x="timestamp_dt:T")
 
-    # tahmini döküm anı (kırmızı kesikli dikey çizgi)
     fut_df = pd.DataFrame({"timestamp_dt": [future_end]})
     future_rule = alt.Chart(fut_df).mark_rule(strokeDash=[6, 4], color="red").encode(x="timestamp_dt:T")
 
     layers = [base_chart, now_rule, future_rule]
 
-    # hedef tap noktası (grafikte kalsın)
     if "tap_temp_c" in keep and np.isfinite(tap_point_val):
         tp = pd.DataFrame({"timestamp_dt": [future_end], "val": [tap_point_val]})
         point = alt.Chart(tp).mark_point(size=120, filled=True).encode(x="timestamp_dt:T", y="val:Q")
@@ -677,7 +667,6 @@ def build_24h_actual_vs_ai_chart(
 
 
 def actual_vs_potential_last50_table(df: pd.DataFrame, model, feat_cols, target_cols):
-    """3 metrik için: Son 50 aktüel ortalama vs AI potansiyel (demo)."""
     if df.empty:
         return
 
@@ -936,7 +925,7 @@ def show_runtime_page(sim_mode: bool):
 
 
 # =========================================================
-# 3) ARC OPTIMIZER (yerleşim: grafik üstte full width, sonra KPI, sonra tablo+kazanç)
+# 3) ARC OPTIMIZER
 # =========================================================
 def show_arc_optimizer_page(sim_mode: bool):
     st.markdown("## 3. Arc Optimizer – Trendler, KPI ve Öneriler")
@@ -952,13 +941,11 @@ def show_arc_optimizer_page(sim_mode: bool):
     last = kpi["last"]
     model, feat_cols, target_cols = load_arc_model()
 
-    # ======= 1) Grafik (full width) =======
     st.markdown("### Proses Trendi (24 saat) + AI Tahmin (sağ taraf)")
     build_24h_actual_vs_ai_chart(df, model, feat_cols, target_cols, height=420)
 
     st.markdown("---")
 
-    # ======= 2) KPI satırı (grafiğin altında) =======
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Son Şarj kWh/t", f"{float(last.get('kwh_per_t')):.1f}" if pd.notna(last.get("kwh_per_t")) else "-")
     c2.metric("Son Şarj Elektrot", f"{float(last.get('electrode_kg_per_heat')):.2f} kg/şarj" if pd.notna(last.get("electrode_kg_per_heat")) else "-")
@@ -967,12 +954,9 @@ def show_arc_optimizer_page(sim_mode: bool):
 
     st.markdown("")
 
-    # ======= 3) Tablo + Kazanç yan yana =======
     left, right = st.columns([3, 1.5])
-
     with left:
         actual_vs_potential_last50_table(df, model, feat_cols, target_cols)
-
     with right:
         st.markdown("### 💰 Proses Kazanç (Ton Başına)")
         m = money_pack(df)
@@ -981,7 +965,6 @@ def show_arc_optimizer_page(sim_mode: bool):
 
     st.markdown("---")
 
-    # ======= 4) Alarmlar + Model/Eğitim + What-if (alt blok) =======
     topA, topB = st.columns([2.2, 1.8])
 
     with topA:
@@ -1117,82 +1100,81 @@ def show_arc_optimizer_page(sim_mode: bool):
 
 
 # =========================================================
-# ✅ NEW: HSE Vision (Demo) — KLASİK SAYFALAR ALTINA EKLENDİ
+# ✅ NEW: HSE Vision (Demo) — cv2 YOK (HTML overlay)
 # =========================================================
 def show_hse_vision_demo_page(sim_mode: bool):
     st.markdown("## 🦺 HSE Vision (Demo) – Kamera / Görüntü")
-    st.caption("Pilot demoda gerçek CV entegrasyonu yerine simüle tespit akışı gösteriyoruz. (Kırmızı kutu: kişi tespiti)")
+    st.caption("Pilot demoda gerçek CV entegrasyonu yerine simüle tespit akışı gösteriyoruz. (Video üstünde animasyonlu kırmızı kutu)")
 
+    st.markdown("### 🎥 Kamera / Görüntü (Demo)")
     st.radio("Kaynak", ["Video (dosya)"], horizontal=True)
 
     up = st.file_uploader("Video yükle (mp4/mov)", type=["mp4", "mov", "m4v"])
     if not up:
-        st.info("Bir video yükleyince kişi tespiti demo olarak kırmızı kutu çizeceğim.")
+        st.info("Bir video yükleyince kişi tespiti demo olarak video üstünde kırmızı kutu ile gösterilecek.")
         return
 
-    # Upload -> temp file
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as f:
-        f.write(up.read())
-        in_path = f.name
+    video_bytes = up.read()
+    size_mb = len(video_bytes) / (1024 * 1024)
 
-    out_path = in_path.replace(".mp4", "_boxed.mp4")
+    # Büyük videoda base64 gömme riskli -> normal st.video göster
+    if size_mb > 20:
+        st.warning(f"Video {size_mb:.1f}MB. Overlay demo için çok büyük; normal video gösteriyorum (overlay kapalı).")
+        st.video(video_bytes)
+    else:
+        # Base64 embed + CSS overlay (kırmızı kutu animasyonu)
+        mime = "video/mp4"
+        if up.name.lower().endswith(".mov"):
+            mime = "video/quicktime"
+        b64 = base64.b64encode(video_bytes).decode("utf-8")
 
-    cap = cv2.VideoCapture(in_path)
-    if not cap.isOpened():
-        st.error("Video açılamadı.")
-        return
+        components.html(
+            f"""
+            <div style="position:relative; width:100%; max-width:980px; margin:0; padding:0;">
+              <video id="hsevid" controls autoplay muted loop
+                style="width:100%; border-radius:12px; display:block; background:#000;">
+                <source src="data:{mime};base64,{b64}" type="{mime}">
+              </video>
 
-    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 960)
-    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 540)
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    fps = float(fps) if fps and fps > 1 else 25.0
+              <!-- Kırmızı kutu overlay -->
+              <div id="bbox"
+                   style="position:absolute; left:10%; top:18%;
+                          width:18%; height:40%;
+                          border:4px solid #ff0000;
+                          border-radius:6px;
+                          box-sizing:border-box;
+                          pointer-events:none;
+                          animation: moveBox 4.5s ease-in-out infinite;">
+              </div>
 
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    vw = cv2.VideoWriter(out_path, fourcc, fps, (w, h))
+              <!-- Etiket -->
+              <div id="label"
+                   style="position:absolute; left:10%; top:14%;
+                          color:#ff0000; font-weight:800; font-size:18px;
+                          text-shadow:0 0 6px rgba(0,0,0,0.6);
+                          pointer-events:none;
+                          animation: moveLabel 4.5s ease-in-out infinite;">
+                PERSON
+              </div>
+            </div>
 
-    # Basit demo tespit: koyu alan (insan silueti varsayımı)
-    kernel = (7, 7)
-    processed = 0
-    max_frames = 900  # demo için limit (~30sn@30fps)
-
-    while processed < max_frames:
-        ok, frame = cap.read()
-        if not ok:
-            break
-
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        _, mask = cv2.threshold(gray, 80, 255, cv2.THRESH_BINARY_INV)
-
-        k = cv2.getStructuringElement(cv2.MORPH_RECT, kernel)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, k, iterations=1)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_DILATE, k, iterations=1)
-
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if contours:
-            c = max(contours, key=cv2.contourArea)
-            area = cv2.contourArea(c)
-            if area > 1500:
-                x, y, ww, hh = cv2.boundingRect(c)
-                cv2.rectangle(frame, (x, y), (x + ww, y + hh), (0, 0, 255), 3)
-                cv2.putText(
-                    frame,
-                    "PERSON",
-                    (x, max(25, y - 10)),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.9,
-                    (0, 0, 255),
-                    2,
-                    cv2.LINE_AA,
-                )
-
-        vw.write(frame)
-        processed += 1
-
-    cap.release()
-    vw.release()
-
-    st.success(f"İşlendi ✅ (frame: {processed})")
-    st.video(out_path)
+            <style>
+              @keyframes moveBox {{
+                0%   {{ left:10%; top:18%; width:18%; height:40%; }}
+                35%  {{ left:40%; top:22%; width:16%; height:42%; }}
+                70%  {{ left:62%; top:20%; width:17%; height:41%; }}
+                100% {{ left:10%; top:18%; width:18%; height:40%; }}
+              }}
+              @keyframes moveLabel {{
+                0%   {{ left:10%; top:14%; }}
+                35%  {{ left:40%; top:18%; }}
+                70%  {{ left:62%; top:16%; }}
+                100% {{ left:10%; top:14%; }}
+              }}
+            </style>
+            """,
+            height=560,
+        )
 
     st.markdown("---")
     st.markdown("### 👷 Davranış / PPE Tespiti (Demo Kontrolleri)")
@@ -1207,6 +1189,7 @@ def show_hse_vision_demo_page(sim_mode: bool):
         nohelmet = st.toggle("Baret yok", value=True, key="hse_nohelmet")
 
     st.markdown("### 🧠 Birleşik Karar")
+    # Demo sabit değerler (istersen sonrasında prosesten türetiriz)
     risk_type = "SLAG / SPLASH"
     prob = 2
     tmin, tmax = 104, 149
@@ -1474,7 +1457,6 @@ def sidebar_controls():
     else:
         st.selectbox(
             "Sayfa",
-            # ✅ yeni sayfa eklendi (klasik sayfalar grubunun altına)
             ["Setup", "Canlı Veri", "ArcOptimizer", "Lab (Advanced)", "HSE Vision (Demo)"],
             index=["Setup", "Canlı Veri", "ArcOptimizer", "Lab (Advanced)", "HSE Vision (Demo)"].index(st.session_state.classic_page)
             if st.session_state.classic_page in ["Setup", "Canlı Veri", "ArcOptimizer", "Lab (Advanced)", "HSE Vision (Demo)"]
