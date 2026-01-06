@@ -3,6 +3,7 @@ import os
 import json
 import random
 import base64
+import base64
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from typing import Optional, Tuple, Dict, Any, List
@@ -63,6 +64,9 @@ def _init_state():
     defaults = {
         "info_state": {},
         "profit_info_state": {},
+        "hse_video_bytes": None,
+        "hse_video_mime": None,
+        "hse_video_name": None,
         "sim_data": None,
         "sim_full_data": None,
         # sim akış state
@@ -1107,53 +1111,100 @@ def show_hse_vision_demo_page(sim_mode: bool):
     st.caption("Pilot demo – görüntü işleme simülasyonu + proses önsezisi")
 
     # =========================
-    # VIDEO YÜKLEME
+    # VIDEO YÜKLE (persist)
     # =========================
     st.markdown("### 🎥 Kamera / Görüntü")
     up = st.file_uploader("Video yükle (mp4 / mov)", type=["mp4", "mov", "m4v"])
 
-    if not up:
-        st.info("Demo videosu yükleyin.")
+    if up is not None:
+        st.session_state.hse_video_bytes = up.getvalue()
+        st.session_state.hse_video_mime = up.type or "video/mp4"
+        st.session_state.hse_video_name = up.name
+
+    if not st.session_state.get("hse_video_bytes"):
+        st.info("Demo videosu yükleyin. (Yükledikten sonra sayfa yenilense bile kalır.)")
         return
 
+    # autoplay için base64 video
+    b64 = base64.b64encode(st.session_state.hse_video_bytes).decode("utf-8")
+    mime = st.session_state.get("hse_video_mime") or "video/mp4"
+
     # =========================
-    # DAVRANIŞ / PPE (DEMO)
+    # RİSK TİPLERİ
     # =========================
+    RISK_TYPES = [
+        "SLAG / SPLASH",
+        "Yük altında çalışma",
+        "Sabitlenmemiş yük / düşen parça",
+        "Baretsiz giriş",
+        "Yetkisiz riskli bölgeye giriş",
+        "Sıcak yüzey / yanık riski",
+        "Forklift–yaya yakınlaşma",
+        "LOTO / enerji izolasyonu ihlali",
+    ]
+
     st.markdown("### 👷 Davranış & PPE (Demo Kontrolleri)")
-    c1, c2, c3 = st.columns(3)
+    c0, c1, c2, c3 = st.columns([1.4, 1, 1, 1])
+    with c0:
+        risk_tipi = st.selectbox("Risk tipi", RISK_TYPES, index=0)
     with c1:
-        kisi_yaklasiyor = st.toggle("Kişi riskli bölgeye yaklaşıyor", value=True)
+        kisi_yaklasiyor = st.toggle("Kişi yaklaşıyor", value=True)
     with c2:
         kisi_bolgede = st.toggle("Kişi riskli bölgede", value=True)
     with c3:
         baret_yok = st.toggle("Baret yok", value=False)
 
     # =========================
-    # RİSK HESABI (DEMO LOGIC)
+    # DEMO RİSK HESABI (basit & anlaşılır)
     # =========================
-    risk_tipi = "SLAG / SPLASH"
-    olasilik = 72 if kisi_bolgede else 15
-    tmin, tmax = (45, 90) if kisi_bolgede else (120, 180)
+    base_prob_map = {
+        "SLAG / SPLASH": 72,
+        "Yük altında çalışma": 85,
+        "Sabitlenmemiş yük / düşen parça": 78,
+        "Baretsiz giriş": 55,
+        "Yetkisiz riskli bölgeye giriş": 65,
+        "Sıcak yüzey / yanık riski": 60,
+        "Forklift–yaya yakınlaşma": 80,
+        "LOTO / enerji izolasyonu ihlali": 75,
+    }
 
-    if kisi_bolgede and olasilik >= 60:
+    base_prob = int(base_prob_map.get(risk_tipi, 60))
+
+    # Duruma göre olasılığı modüle et (demo)
+    olasilik = base_prob
+    if not kisi_bolgede and kisi_yaklasiyor:
+        olasilik = max(20, base_prob - 35)
+    if baret_yok and risk_tipi in ["Baretsiz giriş", "Yetkisiz riskli bölgeye giriş"]:
+        olasilik = min(95, olasilik + 20)
+
+    # Tahmini süre (demo)
+    if kisi_bolgede:
+        tmin, tmax = (45, 90)
+    elif kisi_yaklasiyor:
+        tmin, tmax = (90, 150)
+    else:
+        tmin, tmax = (120, 200)
+
+    # Kritik eşik
+    if kisi_bolgede and olasilik >= 70:
         durum = "🔴 KRİTİK"
-        sorun_metni = (
-            "Slag / splash riski yüksek.\n"
-            "Riskli bölgede personel tespit edildi.\n"
-            "Derhal alanın boşaltılması gerekiyor."
-        )
         alarm = True
-    elif kisi_yaklasiyor or baret_yok:
-        durum = "🟡 DİKKAT"
         sorun_metni = (
-            "Personel riskli bölgeye yaklaşıyor "
-            "veya PPE uygunsuzluğu mevcut."
+            f"{risk_tipi} riski yüksek.\n"
+            f"Personel riskli bölgede tespit edildi.\n"
+            "Derhal alanın boşaltılması ve bariyer kontrolü önerilir."
         )
+    elif kisi_yaklasiyor or baret_yok or olasilik >= 55:
+        durum = "🟡 DİKKAT"
         alarm = False
+        sorun_metni = (
+            f"Olası risk: {risk_tipi}.\n"
+            "Personel yaklaşımı / PPE uygunsuzluğu izleniyor."
+        )
     else:
         durum = "🟢 NORMAL"
-        sorun_metni = None
         alarm = False
+        sorun_metni = None
 
     # =========================
     # LAYOUT: VIDEO | RİSK TABLOSU
@@ -1161,7 +1212,16 @@ def show_hse_vision_demo_page(sim_mode: bool):
     left, right = st.columns([2.2, 1.3])
 
     with left:
-        st.video(up)
+        # Autoplay: iOS/Chrome çoğu zaman "muted" ister, o yüzden muted
+        components.html(
+            f"""
+            <video autoplay muted loop controls playsinline
+                   style="width:100%; border-radius:14px; background:#000;">
+              <source src="data:{mime};base64,{b64}" type="{mime}">
+            </video>
+            """,
+            height=520,
+        )
 
     with right:
         st.markdown("### 📊 Risk Değerlendirme")
@@ -1171,6 +1231,30 @@ def show_hse_vision_demo_page(sim_mode: bool):
             {"Parametre": "Tahmini Süre", "Değer": f"{tmin}–{tmax} sn"},
             {"Parametre": "Durum", "Değer": durum},
         ])
+
+        st.markdown("#### 🔎 Not (Demo Mantığı)")
+        st.caption("Bu PoC’ta CV yerine tetikleyiciler simüle edilir. Gerçekte: kamera + bölge + PPE + proses sinyali birleşir.")
+
+    # =========================
+    # SORUN & ALARM
+    # =========================
+    st.markdown("---")
+    if sorun_metni:
+        st.error(f"⚠️ **TESPİT EDİLEN SORUN**\n\n{sorun_metni}")
+
+        # Alarm: yalnızca KRİTİK’te çalsın
+        if alarm:
+            components.html(
+                """
+                <audio autoplay>
+                  <source src="https://actions.google.com/sounds/v1/alarms/alarm_clock.ogg" type="audio/ogg">
+                </audio>
+                """,
+                height=0,
+            )
+            st.warning("🔊 ALARM AKTİF – KRİTİK İSG RİSKİ")
+    else:
+        st.success("✅ Aktif bir güvenlik riski tespit edilmedi.")
 
     # =========================
     # SORUN & ALARM
