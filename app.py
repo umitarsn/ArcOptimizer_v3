@@ -81,6 +81,9 @@ def _init_state():
         "view_mode": "Persona",
         "persona": "Plant Manager",
         "classic_page": "ArcOptimizer",
+        # safety demo
+        "safety_events": [],
+        "safety_last_alert_ts": None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -741,6 +744,370 @@ def actual_vs_potential_last50_table(df: pd.DataFrame, model, feat_cols, target_
 
 
 # =========================================================
+# ✅ SAFETY (HSE) DEMO – KLASİK SAYFALAR
+# (mevcut sayfalara dokunmadan, izole yeni sayfa)
+# =========================================================
+def _clamp01(x: float) -> float:
+    try:
+        x = float(x)
+    except Exception:
+        return 0.0
+    return max(0.0, min(1.0, x))
+
+
+def _pct(x01: float) -> int:
+    return int(round(_clamp01(x01) * 100))
+
+
+def _now_str() -> str:
+    return datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _push_safety_event(event: Dict[str, Any], max_events: int = 200):
+    ev = dict(event)
+    ev.setdefault("ts", _now_str())
+    st.session_state.safety_events = (st.session_state.safety_events or []) + [ev]
+    if len(st.session_state.safety_events) > max_events:
+        st.session_state.safety_events = st.session_state.safety_events[-max_events:]
+
+
+def _play_siren_once():
+    # WebAudio ile kısa siren (tarayıcı izinlerine bağlı).
+    components.html(
+        """
+        <script>
+        (function(){
+          try {
+            const AudioCtx = window.AudioContext || window.webkitAudioContext;
+            const ctx = new AudioCtx();
+            const o = ctx.createOscillator();
+            const g = ctx.createGain();
+            o.type = 'sawtooth';
+            o.connect(g);
+            g.connect(ctx.destination);
+            g.gain.value = 0.0001;
+
+            const t0 = ctx.currentTime;
+            // 1.2 sn siren: frekans sweep
+            o.frequency.setValueAtTime(420, t0);
+            o.frequency.linearRampToValueAtTime(900, t0 + 0.6);
+            o.frequency.linearRampToValueAtTime(420, t0 + 1.2);
+
+            g.gain.setValueAtTime(0.0001, t0);
+            g.gain.linearRampToValueAtTime(0.18, t0 + 0.05);
+            g.gain.linearRampToValueAtTime(0.001, t0 + 1.2);
+
+            o.start(t0);
+            o.stop(t0 + 1.25);
+
+            setTimeout(()=>{ ctx.close && ctx.close(); }, 1600);
+          } catch(e) {}
+        })();
+        </script>
+        """,
+        height=0,
+    )
+
+
+def _risk_from_process(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
+    """
+    Demo amaçlı basit risk skoru:
+    - Slag/Splash: slag_foaming_index yüksek + panel_delta_t yüksek + kWh/t spike
+    - Ark sapması: kWh/t spike + panel_delta_t + (ems_on değişkeniyle küçük etki)
+    Not: Gerçek model yerine rule + trend mantığı.
+    """
+    out: Dict[str, Dict[str, Any]] = {}
+
+    if df.empty:
+        return out
+
+    last = df.iloc[-1]
+    tail = df.tail(20)
+
+    def safe_float(v, default=np.nan):
+        try:
+            return float(v)
+        except Exception:
+            return default
+
+    kwh = safe_float(last.get("kwh_per_t", np.nan))
+    panel_dt = safe_float(last.get("panel_delta_t_c", np.nan))
+    slag = safe_float(last.get("slag_foaming_index", np.nan))
+    ems_on = safe_float(last.get("ems_on", 0))
+
+    kwh_ref = float(tail["kwh_per_t"].dropna().mean()) if "kwh_per_t" in tail.columns and tail["kwh_per_t"].notna().sum() >= 5 else np.nan
+
+    # normalize parçaları (0..1)
+    # slag 0..10 -> 0..1
+    slag_n = _clamp01((slag - 5.0) / 5.0) if np.isfinite(slag) else 0.0
+    # panel dt 0..60 -> 0..1 (25 üstü risk)
+    panel_n = _clamp01((panel_dt - 18.0) / 22.0) if np.isfinite(panel_dt) else 0.0
+    # kwh spike
+    if np.isfinite(kwh) and np.isfinite(kwh_ref) and kwh_ref > 0:
+        spike = (kwh - kwh_ref) / kwh_ref  # oran
+    else:
+        spike = 0.0
+    spike_n = _clamp01((spike - 0.02) / 0.10)  # %2 üstü başlar, %12'de 1
+
+    # Slag/Splash
+    splash_p = _clamp01(0.55 * slag_n + 0.30 * panel_n + 0.15 * spike_n)
+    splash_tmin = int(round(45 + (1 - splash_p) * 60))  # 45–105 sn
+    splash_tmax = splash_tmin + 45
+
+    out["SLAG / SPLASH"] = {
+        "prob": splash_p,
+        "eta": (splash_tmin, splash_tmax),
+        "why": [
+            f"Slag foaming = {slag:.1f}" if np.isfinite(slag) else "Slag foaming = -",
+            f"Panel ΔT = {panel_dt:.1f} °C" if np.isfinite(panel_dt) else "Panel ΔT = -",
+            "kWh/t spike tespit" if spike_n > 0.2 else "kWh/t stabil",
+        ],
+    }
+
+    # Ark sapması (demo)
+    arc_p = _clamp01(0.50 * spike_n + 0.35 * panel_n + 0.15 * (0.2 if ems_on == 0 else 0.05))
+    arc_tmin = int(round(60 + (1 - arc_p) * 90))  # 60–150 sn
+    arc_tmax = arc_tmin + 60
+
+    out["ARK SAPMASI"] = {
+        "prob": arc_p,
+        "eta": (arc_tmin, arc_tmax),
+        "why": [
+            "Güç dalgalanması / spike patern" if spike_n > 0.2 else "Güç stabil",
+            f"Panel ΔT = {panel_dt:.1f} °C" if np.isfinite(panel_dt) else "Panel ΔT = -",
+            "EMS OFF → stabilite riski artabilir" if ems_on == 0 else "EMS ON",
+        ],
+    }
+
+    return out
+
+
+def show_safety_hse_demo(sim_mode: bool):
+    st.markdown("## Safety (HSE Demo) – Proses Önsezi + Kamera Uyarıları")
+    st.caption("Demo amaçlıdır. Proses riskini (önsezi) + davranış/PPE tespitini birleştirerek **net risk tipi** ile alarm üretir.")
+
+    df = to_df(get_active_data(sim_mode))
+    if df.empty:
+        st.info("Önce veri oluşturun (simülasyon veya canlı kayıt).")
+        return
+
+    # -----------------------------
+    # Sol: proses risk seçimi / sağ: kamera
+    # -----------------------------
+    left, right = st.columns([1.25, 1.75], gap="large")
+
+    with left:
+        st.markdown("### 🔮 Proses Önsezi (Risk Tahmini)")
+        process_risks = _risk_from_process(df)
+
+        risk_options = [
+            "SLAG / SPLASH",
+            "ARK SAPMASI",
+            "SABİTLENMEMİŞ YÜK DÜŞMESİ",
+            "YÜK ALTINDA ÇALIŞMA",
+            "BARETSİZ RİSKLİ BÖLGEYE GİRİŞ",
+        ]
+        risk_type = st.selectbox("Risk tipi", risk_options, index=0, key="hse_risk_type")
+
+        # Prosesle gelen (tahmin edilebilir) risklerde yüzde+zaman, diğerlerinde anlık
+        if risk_type in process_risks:
+            prob = float(process_risks[risk_type]["prob"])
+            eta = process_risks[risk_type]["eta"]
+            why = process_risks[risk_type]["why"]
+
+            st.metric("Olasılık", f"%{_pct(prob)}")
+            st.metric("Tahmini zaman penceresi", f"{eta[0]}–{eta[1]} sn")
+            with st.expander("Neden bu uyarı?", expanded=True):
+                for w in why:
+                    st.write(f"• {w}")
+
+            st.markdown("### ✅ Aksiyon")
+            st.write("• Ocak önünde bulunmayın")
+            st.write("• Manuel müdahale / kapak açma geciktirilsin")
+        else:
+            st.metric("Olasılık", "Anlık tespit")
+            st.metric("Tahmini zaman penceresi", "Şimdi")
+            st.markdown("### ✅ Aksiyon")
+            if risk_type == "SABİTLENMEMİŞ YÜK DÜŞMESİ":
+                st.write("• Askı/bağlama kontrolü (sapan, kanca, kilit)")
+                st.write("• Alanı boşalt")
+            elif risk_type == "YÜK ALTINDA ÇALIŞMA":
+                st.write("• Yük altı derhal boşaltılsın")
+                st.write("• Vinç operatörü ile kilitleme/etiketleme")
+            elif risk_type == "BARETSİZ RİSKLİ BÖLGEYE GİRİŞ":
+                st.write("• Baret takmadan alana giriş yok")
+                st.write("• İSG sorumlusuna bildir")
+
+        st.markdown("---")
+        st.markdown("### ⚙️ Alarm Mantığı (Demo)")
+        st.caption("Siren yalnızca **kritik birleşik alarm** durumunda çalar (alarm kirliliğini engeller).")
+
+        # eşikler (demo)
+        risk_threshold = st.slider("Kritik için proses eşiği (%)", 10, 95, 65, 1, key="hse_thr_prob")
+        eta_threshold = st.slider("Kritik için zaman eşiği (sn)", 10, 240, 120, 5, key="hse_thr_eta")
+
+    with right:
+        st.markdown("### 🎥 Kamera / Görüntü (Demo)")
+        mode = st.radio("Kaynak", ["Kamera (anlık foto)", "Video (dosya)"], index=0, horizontal=True, key="hse_cam_src")
+
+        cam_img = None
+        if mode == "Kamera (anlık foto)":
+            cam_img = st.camera_input("Kamera görüntüsü al", key="hse_cam_input")
+            if cam_img is not None:
+                st.image(cam_img, caption="Kamera görüntüsü (snapshot)", use_container_width=True)
+        else:
+            vid = st.file_uploader("Video yükle (mp4/mov)", type=["mp4", "mov", "m4v"], key="hse_video_up")
+            if vid is not None:
+                st.video(vid)
+
+        st.markdown("### 👷 Davranış / PPE Tespiti (Demo Kontrolleri)")
+        st.caption("Pilot demoda gerçek CV entegrasyonu yerine **simüle tespit** ile akışı gösteriyoruz.")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            person_near_zone = st.toggle("Kişi riskli bölgeye yaklaşıyor", value=False, key="hse_person_near")
+        with c2:
+            person_in_zone = st.toggle("Kişi riskli bölgede", value=False, key="hse_person_in")
+        with c3:
+            helmet_missing = st.toggle("Baret yok", value=False, key="hse_helmet_missing")
+
+        st.markdown("---")
+        st.markdown("### 🧠 Birleşik Karar")
+        # Birleşik karar: proses (varsa) + kamera
+        critical = False
+        level = "🟢 Normal"
+        msg_lines = []
+
+        if risk_type in process_risks:
+            prob = float(process_risks[risk_type]["prob"])
+            eta = process_risks[risk_type]["eta"]
+            prob_pct = _pct(prob)
+            eta_max = int(eta[1])
+
+            # kritik koşul
+            if (prob_pct >= int(risk_threshold)) and (eta_max <= int(eta_threshold)) and (person_near_zone or person_in_zone):
+                critical = True
+                level = "🔴 KRİTİK"
+                msg_lines = [
+                    f"**RİSK TİPİ:** {risk_type}",
+                    f"**Olasılık:** %{prob_pct}",
+                    f"**Tahmini süre:** {eta[0]}–{eta[1]} sn",
+                    f"**Durum:** Kişi {'riskli bölgede' if person_in_zone else 'yaklaşıyor'}",
+                    "**Aksiyon:** Alanı derhal terk edin",
+                ]
+            elif (prob_pct >= int(risk_threshold)) and (eta_max <= int(eta_threshold)):
+                level = "🟠 Yüksek (proses)"
+                msg_lines = [
+                    f"**RİSK TİPİ:** {risk_type}",
+                    f"**Olasılık:** %{prob_pct}",
+                    f"**Tahmini süre:** {eta[0]}–{eta[1]} sn",
+                    "**Durum:** Kişi tespiti yok (kamera)",
+                ]
+            elif person_near_zone or person_in_zone:
+                level = "🟡 Dikkat (davranış)"
+                msg_lines = [
+                    f"**RİSK TİPİ:** {risk_type}",
+                    f"**Olasılık:** %{prob_pct}",
+                    f"**Tahmini süre:** {eta[0]}–{eta[1]} sn",
+                    f"**Durum:** Kişi {'riskli bölgede' if person_in_zone else 'yaklaşıyor'}",
+                ]
+            else:
+                msg_lines = [
+                    f"**RİSK TİPİ:** {risk_type}",
+                    f"**Olasılık:** %{prob_pct}",
+                    f"**Tahmini süre:** {eta[0]}–{eta[1]} sn",
+                    "**Durum:** Stabil",
+                ]
+        else:
+            # davranış/PPE riskleri: anlık
+            if risk_type == "YÜK ALTINDA ÇALIŞMA" and person_in_zone:
+                critical = True
+                level = "🔴 KRİTİK"
+                msg_lines = [
+                    f"**RİSK TİPİ:** {risk_type}",
+                    "**Durum:** Kişi yük altında",
+                    "**Aksiyon:** Alanı derhal boşaltın",
+                ]
+            elif risk_type == "SABİTLENMEMİŞ YÜK DÜŞMESİ" and (person_near_zone or person_in_zone):
+                critical = True
+                level = "🔴 KRİTİK"
+                msg_lines = [
+                    f"**RİSK TİPİ:** {risk_type}",
+                    "**Durum:** Kişi askıda yük bölgesinde/yakınında",
+                    "**Aksiyon:** Alanı derhal boşaltın",
+                ]
+            elif risk_type == "BARETSİZ RİSKLİ BÖLGEYE GİRİŞ" and helmet_missing and (person_near_zone or person_in_zone):
+                level = "🟠 Uyarı (PPE)"
+                msg_lines = [
+                    f"**RİSK TİPİ:** {risk_type}",
+                    "**Durum:** Baret yok + riskli bölge",
+                    "**Aksiyon:** Giriş engellensin / İSG bilgilendirilsin",
+                ]
+            else:
+                level = "🟡 İzle"
+                msg_lines = [
+                    f"**RİSK TİPİ:** {risk_type}",
+                    "**Durum:** İhlal/tehlike koşulu yok veya eksik",
+                ]
+
+        # Alarm kutusu
+        if critical:
+            st.error(level)
+        elif "🟠" in level:
+            st.warning(level)
+        else:
+            st.info(level)
+
+        st.markdown("\n\n".join([f"- {x}" for x in msg_lines]) if msg_lines else "")
+
+        # Siren + log (kritikse)
+        if critical:
+            # aynı saniye içinde spam engeli
+            now_ts = _now_str()
+            if st.session_state.safety_last_alert_ts != now_ts:
+                st.session_state.safety_last_alert_ts = now_ts
+                _play_siren_once()
+                _push_safety_event({
+                    "severity": "CRITICAL",
+                    "risk_type": risk_type,
+                    "probability": f"%{_pct(process_risks[risk_type]['prob'])}" if risk_type in process_risks else "N/A",
+                    "eta_sec": f"{process_risks[risk_type]['eta'][0]}–{process_risks[risk_type]['eta'][1]}" if risk_type in process_risks else "NOW",
+                    "camera": "IN_ZONE" if person_in_zone else "NEAR_ZONE",
+                    "helmet": "MISSING" if helmet_missing else "OK",
+                })
+
+        # Ayrıca “kamera uyarısı” (riskli bölge ihlali) olunca log
+        if (person_in_zone or person_near_zone) and (risk_type in ["BARETSİZ RİSKLİ BÖLGEYE GİRİŞ", "YÜK ALTINDA ÇALIŞMA", "SABİTLENMEMİŞ YÜK DÜŞMESİ"]):
+            _push_safety_event({
+                "severity": "WARN" if not critical else "CRITICAL",
+                "risk_type": risk_type,
+                "probability": "N/A",
+                "eta_sec": "NOW",
+                "camera": "IN_ZONE" if person_in_zone else "NEAR_ZONE",
+                "helmet": "MISSING" if helmet_missing else "OK",
+            })
+
+    st.markdown("---")
+    st.markdown("### 🧾 Event Log (Demo)")
+
+    evs = st.session_state.safety_events or []
+    if not evs:
+        st.caption("Henüz event yok.")
+    else:
+        df_ev = pd.DataFrame(evs).copy()
+        # tekrarları azaltmak için son 50
+        st.dataframe(df_ev.tail(50), use_container_width=True)
+
+    c1, c2 = st.columns([1, 3])
+    with c1:
+        if st.button("🧹 Log temizle", key="hse_clear_log"):
+            st.session_state.safety_events = []
+            st.session_state.safety_last_alert_ts = None
+            st.rerun()
+    with c2:
+        st.caption("Not: Siren tarayıcı izinleri nedeniyle bazı cihazlarda ilk tıklama sonrası çalışır (özellikle iOS).")
+
+
+# =========================================================
 # 1) SETUP
 # =========================================================
 def show_setup_form():
@@ -1364,8 +1731,10 @@ def sidebar_controls():
     else:
         st.selectbox(
             "Sayfa",
-            ["Setup", "Canlı Veri", "ArcOptimizer", "Lab (Advanced)"],
-            index=["Setup", "Canlı Veri", "ArcOptimizer", "Lab (Advanced)"].index(st.session_state.classic_page),
+            ["Setup", "Canlı Veri", "ArcOptimizer", "Safety (HSE Demo)", "Lab (Advanced)"],
+            index=["Setup", "Canlı Veri", "ArcOptimizer", "Safety (HSE Demo)", "Lab (Advanced)"].index(st.session_state.classic_page)
+            if st.session_state.classic_page in ["Setup", "Canlı Veri", "ArcOptimizer", "Safety (HSE Demo)", "Lab (Advanced)"]
+            else 2,
             key="classic_page",
         )
 
@@ -1428,6 +1797,8 @@ def main():
             show_runtime_page(sim_mode)
         elif page == "ArcOptimizer":
             show_arc_optimizer_page(sim_mode)
+        elif page == "Safety (HSE Demo)":
+            show_safety_hse_demo(sim_mode)
         else:
             show_lab_simulation(sim_mode)
 
