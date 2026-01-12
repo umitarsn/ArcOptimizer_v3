@@ -25,10 +25,11 @@ st.set_page_config(
     layout="wide",
 )
 
-# Sidebar genişlik fix
+# ✅ Sidebar genişlik fix + ✅ Genel font (14–15px)
 st.markdown(
     """
     <style>
+    html, body, [class*="css"] { font-size: 14.5px; }
     section[data-testid="stSidebar"] { width: 340px !important; }
     section[data-testid="stSidebar"] > div { width: 340px !important; }
     .block-container { padding-top: 1.2rem; padding-bottom: 2.0rem; }
@@ -81,8 +82,8 @@ def _init_state():
         "model_last_train_rows": 0,
         "model_train_count": 0,
         "model_last_trained_rows_marker": 0,
-        # ui
-        "page": "ArcOptimizer",
+        # ui (Persona kaldırıldı → sadece klasik sayfalar)
+        "classic_page": "ArcOptimizer",
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -93,7 +94,7 @@ _init_state()
 
 
 # =========================================================
-# WIDGET BIND HELPERS
+# WIDGET BIND HELPERS (duplicate key fix)
 # =========================================================
 def bind_toggle(label: str, state_key: str, widget_key: str, help_text: Optional[str] = None):
     def _sync():
@@ -108,7 +109,15 @@ def bind_toggle(label: str, state_key: str, widget_key: str, help_text: Optional
     )
 
 
-def bind_number_int(label: str, state_key: str, widget_key: str, min_v: int, max_v: int, step: int = 1, help_text: Optional[str] = None):
+def bind_number_int(
+    label: str,
+    state_key: str,
+    widget_key: str,
+    min_v: int,
+    max_v: int,
+    step: int = 1,
+    help_text: Optional[str] = None,
+):
     def _sync():
         st.session_state[state_key] = int(st.session_state[widget_key])
 
@@ -351,15 +360,9 @@ def to_df(data_source):
         return pd.DataFrame()
 
     df = pd.DataFrame(data_source).copy()
-
-    # ✅ Türkiye saati güvenli parse
     if "timestamp" in df.columns:
         try:
-            ts = pd.to_datetime(df["timestamp"], errors="coerce")
-            if getattr(ts.dt, "tz", None) is None:
-                df["timestamp_dt"] = ts.dt.tz_localize(TZ)
-            else:
-                df["timestamp_dt"] = ts.dt.tz_convert(TZ)
+            df["timestamp_dt"] = pd.to_datetime(df["timestamp"], utc=True).dt.tz_convert(TZ)
         except Exception:
             df["timestamp_dt"] = pd.to_datetime(df["timestamp"], errors="coerce")
     else:
@@ -586,11 +589,13 @@ def build_24h_actual_vs_ai_chart(
         f"""
         <div style="display:flex; justify-content:flex-end; margin-top:2px; margin-bottom:6px;">
           <div style="text-align:left; padding:6px 10px; border-radius:10px;">
-            <div style="font-size:22px; font-weight:800; line-height:1.05;">⬆</div>
-            <div style="font-size:18px; font-weight:800; line-height:1.2;">Aktüel</div>
-            <div style="font-size:18px; font-weight:800; line-height:1.2; margin-bottom:6px;">Potansiyel (AI)</div>
-            <div style="font-size:14px; font-weight:700; line-height:1.25;">Hedef Döküm Zamanı (AI): {hedef_time_str}</div>
-            <div style="font-size:14px; line-height:1.25;">Hedef Döküm Sıcaklığı (AI): {hedef_temp_str}</div>
+            <div style="font-size:18px; font-weight:800; line-height:1.2;">Zaman (son 24 saat + AI tahmin)</div>
+            <div style="font-size:13px; line-height:1.25; color:#555;">
+              Sol: aktüel · Sağ: AI potansiyel (kesikli) · 'now': son ölçüm · kırmızı: hedef döküm
+            </div>
+            <div style="font-size:13px; line-height:1.25; margin-top:6px;">
+              <b>Hedef Döküm (AI):</b> {hedef_time_str} · <b>Hedef Tap T:</b> {hedef_temp_str}
+            </div>
           </div>
         </div>
         """,
@@ -603,7 +608,7 @@ def build_24h_actual_vs_ai_chart(
         .encode(
             x=alt.X(
                 "timestamp_dt:T",
-                title="Zaman (son 24 saat + AI tahmin)",
+                title=None,
                 scale=alt.Scale(domain=[domain_min, domain_max]),
                 axis=alt.Axis(format="%d.%m %H:%M", tickCount=10, labelAngle=-35),
             ),
@@ -636,8 +641,7 @@ def build_24h_actual_vs_ai_chart(
 
     delta_min = (future_end - last_time).total_seconds() / 60.0
     st.caption(
-        f"Sol: **aktüel (son 24 saat)** · Sağ: **AI potansiyel (kesikli)** · "
-        f"'now' çizgisi: son ölçüm. Tahmini döküm anı ~ **{delta_min:.0f} dk** sonrası (kırmızı kesikli çizgi)."
+        f"now çizgisi: son ölçüm. Tahmini döküm anı ~ **{delta_min:.0f} dk** sonrası (kırmızı kesikli çizgi)."
     )
 
 
@@ -802,16 +806,17 @@ def show_setup_form():
                 if onem == 1:
                     required_fields += 1
 
-    st.subheader("📊 Setup Veri Giriş Durumu")
-    pct_all = round(100 * total_filled / total_fields, 1) if total_fields else 0
-    pct_req = round(100 * required_filled / required_fields, 1) if required_fields else 0
-    st.metric("Toplam Giriş Oranı", f"{pct_all}%")
-    st.progress(min(pct_all / 100, 1.0))
-    st.metric("Zorunlu Veri Girişi", f"{pct_req}%")
-    st.progress(min(pct_req / 100, 1.0))
-    eksik = required_fields - required_filled
-    if eksik > 0:
-        st.warning(f"❗ Eksik Zorunlu Değerler: {eksik}")
+    with st.sidebar:
+        st.subheader("📊 Setup Veri Giriş Durumu")
+        pct_all = round(100 * total_filled / total_fields, 1) if total_fields else 0
+        pct_req = round(100 * required_filled / required_fields, 1) if required_fields else 0
+        st.metric("Toplam Giriş Oranı", f"{pct_all}%")
+        st.progress(min(pct_all / 100, 1.0))
+        st.metric("Zorunlu Veri Girişi", f"{pct_req}%")
+        st.progress(min(pct_req / 100, 1.0))
+        eksik = required_fields - required_filled
+        if eksik > 0:
+            st.warning(f"❗ Eksik Zorunlu Değerler: {eksik}")
 
 
 # =========================================================
@@ -1021,16 +1026,67 @@ def show_arc_optimizer_page(sim_mode: bool):
                 f"Toplam eğitim: {st.session_state.model_train_count}"
             )
 
+    st.markdown("---")
+    st.markdown("### 🧪 What-if Simülasyonu (Arc Optimizer)")
+
+    model, feat_cols, target_cols = load_arc_model()
+    if model is None or feat_cols is None:
+        st.info("What-if için önce modeli eğitin (en az ~20 şarj).")
+    else:
+        last_row = df.iloc[-1]
+
+        def num_input(name, col, min_v, max_v, step, fmt="%.1f"):
+            raw = last_row.get(col, (min_v + max_v) / 2)
+            try:
+                v = float(raw)
+            except Exception:
+                v = float((min_v + max_v) / 2)
+            v = max(min_v, min(v, max_v))
+            return st.number_input(name, min_v, max_v, v, step=step, format=fmt, key=f"whatif_{col}")
+
+        w1, w2 = st.columns(2)
+        with w1:
+            tap_weight = num_input("Tap Weight (t)", "tap_weight_t", 20.0, 60.0, 0.5)
+            duration = num_input("Süre (dk)", "duration_min", 30.0, 90.0, 1.0, "%.0f")
+            energy = num_input("Enerji (kWh)", "energy_kwh", 500.0, 30000.0, 50.0)
+            o2_flow = num_input("O2 (Nm³/h)", "o2_flow_nm3h", 300.0, 3000.0, 10.0)
+        with w2:
+            slag = num_input("Slag Foaming (0–10)", "slag_foaming_index", 0.0, 10.0, 0.5)
+            panel_dT = num_input("Panel ΔT (°C)", "panel_delta_t_c", 0.0, 60.0, 0.5)
+            elec = num_input("Elektrot (kg/şarj)", "electrode_kg_per_heat", 0.5, 6.0, 0.05)
+
+        if st.button("Simülasyonu Çalıştır", key="btn_run_whatif"):
+            inp = {
+                "tap_weight_t": tap_weight,
+                "duration_min": duration,
+                "energy_kwh": energy,
+                "o2_flow_nm3h": o2_flow,
+                "slag_foaming_index": slag,
+                "panel_delta_t_c": panel_dT,
+                "electrode_kg_per_heat": elec,
+            }
+            row_df = pd.DataFrame([inp])[feat_cols].fillna(0.0)
+            try:
+                preds = model.predict(row_df)[0]
+                pred_dict = dict(zip(target_cols, preds))
+                kwh_pred = float(pred_dict.get("kwh_per_t", float("nan")))
+                tap_pred = float(pred_dict.get("tap_temp_c", float("nan")))
+                r1, r2 = st.columns(2)
+                r1.metric("AI kWh/t", f"{kwh_pred:.1f}" if np.isfinite(kwh_pred) else "-")
+                r2.metric("AI Tap T", f"{tap_pred:.0f} °C" if np.isfinite(tap_pred) else "-")
+            except Exception as e:
+                st.error(f"Tahmin hatası: {e}")
+
 
 # =========================================================
-# 4) HSE Vision (Demo)
+# HSE Vision (Demo) — Temizlenmiş (tek layout, tek alarm, tekrar yok)
 # =========================================================
 def show_hse_vision_demo_page(sim_mode: bool):
     st.markdown("## 🦺 HSE Vision (Demo) – Kamera & Risk Değerlendirme")
-    st.caption("Pilot demo – görüntü işleme simülasyonu + proses önsezisi (PoC)")
+    st.caption("Pilot demo – görüntü işleme simülasyonu + risk skoru + kısa vadeli AI tahmin (PoC)")
 
     st.markdown("### 🎥 Kamera / Görüntü")
-    up = st.file_uploader("Video yükle (mp4 / mov)", type=["mp4", "mov", "m4v"], key="hse_uploader")
+    up = st.file_uploader("Video yükle (mp4 / mov)", type=["mp4", "mov", "m4v"])
 
     if up is not None:
         st.session_state.hse_video_bytes = up.getvalue()
@@ -1058,15 +1114,15 @@ def show_hse_vision_demo_page(sim_mode: bool):
     st.markdown("### 👷 Davranış & PPE (Demo Kontrolleri)")
     c0, c1, c2, c3 = st.columns([1.5, 1, 1, 1])
     with c0:
-        risk_tipi = st.selectbox("Risk tipi", RISK_TYPES, index=0, key="hse_risk_type")
+        risk_tipi = st.selectbox("Risk tipi", RISK_TYPES, index=0)
     with c1:
-        kisi_yaklasiyor = st.toggle("Kişi yaklaşıyor", value=True, key="hse_approach")
+        kisi_yaklasiyor = st.toggle("Kişi yaklaşıyor", value=True)
     with c2:
-        kisi_bolgede = st.toggle("Kişi riskli bölgede", value=True, key="hse_in_zone")
+        kisi_bolgede = st.toggle("Kişi riskli bölgede", value=True)
     with c3:
-        baret_yok = st.toggle("Baret yok", value=False, key="hse_no_helmet")
+        baret_yok = st.toggle("Baret yok", value=False)
 
-    # Risk skoru (0–100) – PoC
+    # Skor (0–100) demo mantığı
     type_weight = {
         "SLAG / SPLASH": 25,
         "Yük altında çalışma": 30,
@@ -1087,8 +1143,10 @@ def show_hse_vision_demo_page(sim_mode: bool):
         score += 20
     score = int(max(0, min(100, score)))
 
-    # Olasılık / süre
+    # Olasılık (demo)
     olasilik = int(max(1, min(99, round(score * 0.9))))
+
+    # Süre (demo)
     if kisi_bolgede:
         tmin, tmax = (45, 90)
     elif kisi_yaklasiyor:
@@ -1096,6 +1154,7 @@ def show_hse_vision_demo_page(sim_mode: bool):
     else:
         tmin, tmax = (120, 200)
 
+    # Durum
     if score >= 75:
         durum = "🔴 KRİTİK"
         alarm = True
@@ -1118,11 +1177,18 @@ def show_hse_vision_demo_page(sim_mode: bool):
         alarm = False
         sorun_metni = None
 
-    # Risk trend: aktüel + AI tahmin (15 dk)
-    now = datetime.now(TZ)
+    # AI trend: şimdi → +15dk
     horizon_min = 15
-    drift = +2.4 if kisi_bolgede else (+1.2 if (kisi_yaklasiyor or baret_yok) else -1.8)
+    now = datetime.now(TZ)
 
+    if kisi_bolgede:
+        drift = +2.4
+    elif kisi_yaklasiyor or baret_yok:
+        drift = +1.2
+    else:
+        drift = -1.8
+
+    # Aktüel (son 7 dk)
     actual_points = []
     for i in range(6, -1, -1):
         t = now - timedelta(minutes=i)
@@ -1130,6 +1196,7 @@ def show_hse_vision_demo_page(sim_mode: bool):
         v = int(max(0, min(100, v)))
         actual_points.append({"ts": t, "risk": v, "type": "Aktüel"})
 
+    # Potansiyel (AI)
     future_points = []
     v = float(score)
     for m in range(0, horizon_min + 1, 1):
@@ -1146,6 +1213,7 @@ def show_hse_vision_demo_page(sim_mode: bool):
             crit_time = row["ts"]
             break
 
+    # LAYOUT: VIDEO | PANEL
     left, right = st.columns([2.2, 1.3])
 
     with left:
@@ -1162,6 +1230,7 @@ def show_hse_vision_demo_page(sim_mode: bool):
     with right:
         st.markdown("### 🧠 Genel HSE Risk Skoru")
         st.metric("Risk Skoru (0–100)", f"{score}")
+        st.caption("Aktüel (son dakikalar) + AI tahmini (şimdiden sonra)")
 
         ch = (
             alt.Chart(risk_df)
@@ -1215,7 +1284,7 @@ def show_hse_vision_demo_page(sim_mode: bool):
 
 
 # =========================================================
-# 5) LAB (Advanced)
+# LAB – Simülasyon / Adhoc (İleri seviye)
 # =========================================================
 def show_lab_simulation(sim_mode: bool):
     st.markdown("## Lab – Simülasyon / Adhoc Analiz (İleri Seviye)")
@@ -1304,7 +1373,7 @@ def show_lab_simulation(sim_mode: bool):
 
 
 # =========================================================
-# SIDEBAR: NAV + HIZLI SİM AKIŞ
+# SIDEBAR: NAV + HIZLI SİM AKIŞ  (Persona kaldırıldı)
 # =========================================================
 def sidebar_controls():
     st.markdown("### FeCr AI")
@@ -1323,12 +1392,18 @@ def sidebar_controls():
 
     st.divider()
 
-    pages = ["Setup", "Canlı Veri", "ArcOptimizer", "HSE Vision (Demo)", "Lab (Advanced)"]
-    st.selectbox("Sayfa", pages, index=pages.index(st.session_state.page) if st.session_state.page in pages else 2, key="page")
+    st.selectbox(
+        "Sayfa",
+        ["Setup", "Canlı Veri", "ArcOptimizer", "Lab (Advanced)", "HSE Vision (Demo)"],
+        index=["Setup", "Canlı Veri", "ArcOptimizer", "Lab (Advanced)", "HSE Vision (Demo)"].index(st.session_state.classic_page)
+        if st.session_state.classic_page in ["Setup", "Canlı Veri", "ArcOptimizer", "Lab (Advanced)", "HSE Vision (Demo)"]
+        else 2,
+        key="classic_page",
+    )
 
     st.divider()
 
-    is_lab = st.session_state.page == "Lab (Advanced)"
+    is_lab = (st.session_state.classic_page == "Lab (Advanced)")
 
     if sim_mode and (not is_lab):
         st.markdown("### 🔄 Hızlı Akış")
@@ -1366,8 +1441,7 @@ def main():
     with st.sidebar:
         sim_mode = sidebar_controls()
 
-    page = st.session_state.page
-
+    page = st.session_state.classic_page
     if page == "Setup":
         show_setup_form()
     elif page == "Canlı Veri":
