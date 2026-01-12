@@ -5,7 +5,7 @@ import random
 import base64
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
-from typing import Optional, List
+from typing import Optional, List, Tuple
 
 import numpy as np
 import pandas as pd
@@ -82,8 +82,19 @@ def _init_state():
         "model_last_train_rows": 0,
         "model_train_count": 0,
         "model_last_trained_rows_marker": 0,
-        # ui (Persona kaldırıldı → sadece klasik sayfalar)
+        # ui
         "classic_page": "ArcOptimizer",
+        # --- Furnace efficiency defaults (for demo / advisory) ---
+        "fe_target_kwh_t": 420.0,          # hedef spesifik enerji
+        "fe_target_tap_temp": 1610.0,      # hedef tap temp
+        "fe_progress_override_pct": 70.0,  # "şu an" ilerleme (demo knob)
+        "fe_cosphi_furnace": 0.88,
+        "fe_cosphi_lf": 0.92,
+        "fe_flicker": 35.0,                # 0-100
+        "fe_ng_nm3": 0.0,                  # heat bazlı (tahmini)
+        "fe_carbon_kg": 0.0,
+        "fe_o2_nm3": 0.0,
+        "fe_heat_stage": "Melting",        # Melting / Refining / LF Heating
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -904,6 +915,463 @@ def show_runtime_page(sim_mode: bool):
 
 
 # =========================================================
+# 2B) OCAK VERİM & ELEKTRİKSEL KONTROL (ADVISORY ONLY)
+# =========================================================
+def _safe_float(x, default=np.nan) -> float:
+    try:
+        v = float(x)
+        return v
+    except Exception:
+        return float(default)
+
+
+def _clamp(v: float, a: float, b: float) -> float:
+    return float(max(a, min(b, v)))
+
+
+def _estimate_chemical_energy_kwh(
+    o2_nm3: float,
+    ng_nm3: float,
+    carbon_kg: float,
+) -> Tuple[float, dict]:
+    """
+    Demo-level chemical energy conversion to kWh:
+    - Natural gas: LHV ~ 10.0 kWh/Nm3 (order of magnitude)
+    - Carbon (injection): ~ 9.0 kWh/kg (order of magnitude)
+    - Oxygen: not a fuel; enables exothermic oxidation.
+      Use a conservative proxy: 0.8 kWh per Nm3 O2 (order of magnitude, highly process-dependent).
+    """
+    kwh_ng = _clamp(ng_nm3, 0, 1e9) * 10.0
+    kwh_c = _clamp(carbon_kg, 0, 1e9) * 9.0
+    kwh_o2 = _clamp(o2_nm3, 0, 1e9) * 0.8
+
+    total = kwh_ng + kwh_c + kwh_o2
+    breakdown = {"NG_kWh": kwh_ng, "C_kWh": kwh_c, "O2_proxy_kWh": kwh_o2, "Total_kWh": total}
+    return float(total), breakdown
+
+
+def _arc_health_from_signals(slag_foaming: float, panel_dt: float, flicker: float) -> Tuple[str, float]:
+    """
+    Returns (label, score 0-1). Heuristic.
+    """
+    sf = _clamp(slag_foaming, 0, 10) / 10.0
+    pd = 1.0 - _clamp(panel_dt, 0, 40) / 40.0
+    fl = 1.0 - _clamp(flicker, 0, 100) / 100.0
+
+    score = 0.45 * sf + 0.30 * pd + 0.25 * fl
+    if score >= 0.75:
+        return "🟢 Stabil", float(score)
+    if score >= 0.55:
+        return "🟡 Orta", float(score)
+    return "🔴 Kararsız", float(score)
+
+
+def _efficiency_index(
+    progress_pct: float,
+    cosphi_f: float,
+    flicker: float,
+    panel_dt: float,
+) -> float:
+    """
+    0-1 efficiency index (demo). Combines progress & power quality & losses.
+    """
+    p = _clamp(progress_pct, 0, 100) / 100.0
+    pf = _clamp(cosphi_f, 0.5, 1.0)
+    fl = 1.0 - _clamp(flicker, 0, 100) / 100.0
+    pd = 1.0 - _clamp(panel_dt, 0, 40) / 40.0
+
+    idx = 0.40 * p + 0.30 * pf + 0.20 * fl + 0.10 * pd
+    return float(_clamp(idx, 0.0, 1.0))
+
+
+def _loss_breakdown_kwh(total_in_kwh: float, flicker: float, cosphi: float, panel_dt: float) -> dict:
+    """
+    Estimate losses (kWh) in buckets for visualization (demo heuristic).
+    """
+    total = max(float(total_in_kwh), 0.0)
+    # base loss fractions
+    loss_arc = _clamp(flicker / 100.0, 0, 1) * 0.10          # up to 10%
+    loss_pf = _clamp((0.95 - cosphi) / 0.45, 0, 1) * 0.06    # up to 6%
+    loss_wall = _clamp(panel_dt / 40.0, 0, 1) * 0.08         # up to 8%
+
+    loss_total_frac = _clamp(loss_arc + loss_pf + loss_wall, 0, 0.35)
+    useful_frac = 1.0 - loss_total_frac
+
+    out = {
+        "Useful (to bath)": total * useful_frac,
+        "Arc instability loss": total * loss_arc,
+        "Reactive/PF loss": total * loss_pf,
+        "Wall/Panel thermal loss": total * loss_wall,
+    }
+    # normalize tiny numeric negatives
+    for k in list(out.keys()):
+        out[k] = max(float(out[k]), 0.0)
+    return out
+
+
+def _ai_predict_targets(df: pd.DataFrame):
+    """
+    Returns predicted (kwh_per_t, tap_temp_c) if model exists, else fallback from recent mean.
+    """
+    model, feat_cols, target_cols = load_arc_model()
+    if df.empty:
+        return model, feat_cols, target_cols, np.nan, np.nan
+
+    tail50 = df.tail(50).copy()
+
+    def safe_mean(series: pd.Series, default: float) -> float:
+        series = series.dropna()
+        return float(series.mean()) if len(series) else float(default)
+
+    base_kwh = safe_mean(tail50["kwh_per_t"], safe_mean(df["kwh_per_t"], 420.0)) if "kwh_per_t" in df.columns else 420.0
+    base_tap = safe_mean(tail50["tap_temp_c"], safe_mean(df["tap_temp_c"], 1610.0)) if "tap_temp_c" in df.columns else 1610.0
+
+    pred_kwh = max(base_kwh - 5.0, 0.0)
+    pred_tap = base_tap + 5.0
+
+    if model is not None and feat_cols is not None and target_cols is not None and len(tail50) >= 10:
+        feat_defaults = {}
+        for c in feat_cols:
+            if c in tail50.columns:
+                feat_defaults[c] = safe_mean(tail50[c], safe_mean(df[c], 0.0))
+            else:
+                feat_defaults[c] = 0.0
+
+        if "slag_foaming_index" in feat_defaults:
+            feat_defaults["slag_foaming_index"] = 7.0
+        if "panel_delta_t_c" in feat_defaults:
+            feat_defaults["panel_delta_t_c"] = min(20.0, float(feat_defaults["panel_delta_t_c"]))
+
+        row_df = pd.DataFrame([feat_defaults])[feat_cols].fillna(0.0)
+        try:
+            preds = model.predict(row_df)[0]
+            pred_dict = dict(zip(target_cols, preds))
+            if "kwh_per_t" in pred_dict and np.isfinite(pred_dict["kwh_per_t"]):
+                pred_kwh = max(float(pred_dict["kwh_per_t"]), 0.0)
+            if "tap_temp_c" in pred_dict and np.isfinite(pred_dict["tap_temp_c"]):
+                pred_tap = float(pred_dict["tap_temp_c"])
+        except Exception:
+            pass
+
+    return model, feat_cols, target_cols, float(pred_kwh), float(pred_tap)
+
+
+def _compose_advisory(
+    cosphi_f: float,
+    cosphi_lf: float,
+    flicker: float,
+    arc_label: str,
+    panel_dt: float,
+    progress_pct: float,
+    tap_pred_temp: float,
+    target_tap_temp: float,
+) -> Tuple[str, List[str]]:
+    """
+    Returns (headline, bullet suggestions) — advisory only.
+    """
+    bullets = []
+    headline = "Proses genel olarak stabil görünüyor."
+
+    if arc_label.startswith("🔴") or flicker >= 60:
+        headline = "Ark kararsız / dalgalı – enerji verimi düşüyor."
+        bullets.append("Köpük cüruf (slag foaming) yeterli mi? Artırmayı değerlendir.")
+        bullets.append("Elektrot regülasyonunu yumuşat (agresif hareket dalgalanmayı artırır).")
+
+    if cosphi_f < 0.88:
+        bullets.append(f"Ocak cosφ düşük ({cosphi_f:.2f}). Reaktif yük yükseliyor: ark stabilitesi + kademe/empedans penceresini gözden geçir.")
+    if cosphi_lf < 0.92:
+        bullets.append(f"Pota cosφ düşük ({cosphi_lf:.2f}). LF’de kademe/ark boyu ile PF iyileştirme fırsatı var.")
+
+    if panel_dt >= 25:
+        bullets.append(f"Panel ΔT yüksek ({panel_dt:.1f}°C). Panel ısı yükünü azaltacak daha stabil ark + doğru foaming önerilir.")
+
+    # Tap readiness / remaining
+    if progress_pct < 60:
+        bullets.append("Ergime ilerlemesi erken safhada: agresif güç artışı yerine stabil enerji transferi önceliklendir.")
+    elif progress_pct > 90 and np.isfinite(tap_pred_temp) and np.isfinite(target_tap_temp):
+        if tap_pred_temp < target_tap_temp - 10:
+            bullets.append("Döküme yakın ama tap sıcaklık tahmini düşük: son ısıtma safhasını planla (LF/ocak).")
+        elif tap_pred_temp > target_tap_temp + 10:
+            bullets.append("Döküme yakın ve tap sıcaklık tahmini yüksek: aşırı ısıtma riskine karşı enerji/kimyasal inputu optimize et.")
+
+    if not bullets:
+        bullets = ["Mevcut rejimi koru. Sapma görürsen ArcOptimizer öneri ekranına bak."]
+
+    return headline, bullets
+
+
+def show_furnace_efficiency_page(sim_mode: bool):
+    st.markdown("## ⚡ Ocak Verim & Elektriksel Kontrol (Advisory)")
+    st.caption("İlk faz: **sadece öneri**. SCADA/PLC write-back yoktur. Enerji/entalpi/kalite göstergeleri demo–PoC amaçlıdır.")
+
+    df = to_df(get_active_data(sim_mode))
+    if df.empty:
+        st.info("Önce veri oluşturun (simülasyon veya canlı kayıt).")
+        return
+
+    last = df.iloc[-1]
+    tap_weight_t = _safe_float(last.get("tap_weight_t", np.nan))
+    duration_min = _safe_float(last.get("duration_min", np.nan))
+    elec_energy_kwh = _safe_float(last.get("energy_kwh", np.nan))
+    kwh_per_t = _safe_float(last.get("kwh_per_t", np.nan))
+    panel_dt = _safe_float(last.get("panel_delta_t_c", 18.0), 18.0)
+    slag_foaming = _safe_float(last.get("slag_foaming_index", 6.0), 6.0)
+    o2_flow_nm3h = _safe_float(last.get("o2_flow_nm3h", 0.0), 0.0)
+
+    # --- Controls (assumptions) ---
+    with st.expander("⚙️ Varsayımlar / Girişler (Pilot için)", expanded=True):
+        c1, c2, c3, c4 = st.columns([1.1, 1.1, 1.1, 1.2])
+        with c1:
+            st.session_state.fe_heat_stage = st.selectbox(
+                "Aşama",
+                ["Melting", "Refining", "LF Heating"],
+                index=["Melting", "Refining", "LF Heating"].index(st.session_state.fe_heat_stage)
+                if st.session_state.fe_heat_stage in ["Melting", "Refining", "LF Heating"] else 0,
+                key="fe_heat_stage_sel",
+            )
+        with c2:
+            st.session_state.fe_target_kwh_t = st.number_input(
+                "Hedef kWh/t",
+                min_value=250.0,
+                max_value=900.0,
+                value=float(st.session_state.fe_target_kwh_t),
+                step=5.0,
+                key="fe_target_kwh_t_inp",
+            )
+        with c3:
+            st.session_state.fe_target_tap_temp = st.number_input(
+                "Hedef Tap T (°C)",
+                min_value=1450.0,
+                max_value=1750.0,
+                value=float(st.session_state.fe_target_tap_temp),
+                step=1.0,
+                key="fe_target_tap_temp_inp",
+            )
+        with c4:
+            st.session_state.fe_progress_override_pct = st.slider(
+                "Şu anki ilerleme (%) (demo knob)",
+                0.0, 100.0,
+                float(st.session_state.fe_progress_override_pct),
+                1.0,
+                key="fe_progress_pct_slider",
+            )
+
+        c5, c6, c7 = st.columns([1.0, 1.0, 1.0])
+        with c5:
+            st.session_state.fe_cosphi_furnace = st.slider(
+                "cosφ (Ocak)",
+                0.60, 1.00,
+                float(st.session_state.fe_cosphi_furnace),
+                0.01,
+                key="fe_cosphi_furnace_slider",
+            )
+        with c6:
+            st.session_state.fe_cosphi_lf = st.slider(
+                "cosφ (Pota/LF)",
+                0.60, 1.00,
+                float(st.session_state.fe_cosphi_lf),
+                0.01,
+                key="fe_cosphi_lf_slider",
+            )
+        with c7:
+            st.session_state.fe_flicker = st.slider(
+                "Flicker / Dalgalanma (0–100)",
+                0.0, 100.0,
+                float(st.session_state.fe_flicker),
+                1.0,
+                key="fe_flicker_slider",
+            )
+
+        st.markdown("**Kimyasal enerji (heat bazlı tahmin)**")
+        d1, d2, d3 = st.columns(3)
+        with d1:
+            st.session_state.fe_o2_nm3 = st.number_input(
+                "O₂ (Nm³/heat) (opsiyonel)",
+                min_value=0.0, max_value=50000.0,
+                value=float(st.session_state.fe_o2_nm3),
+                step=100.0,
+                key="fe_o2_nm3_inp",
+                help="Pilot için: toplam O₂ miktarı (heat bazlı). Yoksa 0 bırak; sadece elektrik üzerinden gider.",
+            )
+        with d2:
+            st.session_state.fe_ng_nm3 = st.number_input(
+                "Doğalgaz (Nm³/heat) (opsiyonel)",
+                min_value=0.0, max_value=50000.0,
+                value=float(st.session_state.fe_ng_nm3),
+                step=50.0,
+                key="fe_ng_nm3_inp",
+            )
+        with d3:
+            st.session_state.fe_carbon_kg = st.number_input(
+                "Karbon (kg/heat) (opsiyonel)",
+                min_value=0.0, max_value=20000.0,
+                value=float(st.session_state.fe_carbon_kg),
+                step=10.0,
+                key="fe_carbon_kg_inp",
+            )
+
+        st.caption("Not: Kimyasal enerji dönüşümleri bu fazda **yaklaşık** (order-of-magnitude). Gerçek tag’ler gelince kalibre edilir.")
+
+    # --- derived values ---
+    target_kwh_t = float(st.session_state.fe_target_kwh_t)
+    target_tap_temp = float(st.session_state.fe_target_tap_temp)
+    progress_pct = float(st.session_state.fe_progress_override_pct)
+    cosphi_f = float(st.session_state.fe_cosphi_furnace)
+    cosphi_lf = float(st.session_state.fe_cosphi_lf)
+    flicker = float(st.session_state.fe_flicker)
+    o2_nm3 = float(st.session_state.fe_o2_nm3)
+    ng_nm3 = float(st.session_state.fe_ng_nm3)
+    carbon_kg = float(st.session_state.fe_carbon_kg)
+
+    chem_kwh, chem_break = _estimate_chemical_energy_kwh(o2_nm3, ng_nm3, carbon_kg)
+    total_in_kwh = (elec_energy_kwh if np.isfinite(elec_energy_kwh) else 0.0) + chem_kwh
+
+    # If weights known -> per ton
+    total_in_kwh_t = np.nan
+    if np.isfinite(tap_weight_t) and tap_weight_t > 0:
+        total_in_kwh_t = total_in_kwh / tap_weight_t
+
+    arc_label, arc_score = _arc_health_from_signals(slag_foaming, panel_dt, flicker)
+    eff_idx = _efficiency_index(progress_pct, cosphi_f, flicker, panel_dt)
+    losses = _loss_breakdown_kwh(total_in_kwh, flicker, cosphi_f, panel_dt)
+
+    # AI predictions
+    model, feat_cols, target_cols, pred_kwh_t, pred_tap_temp = _ai_predict_targets(df)
+
+    # Predict remaining time to tap (very rough):
+    # remaining energy (kWh/t) to target + pace based on avg power
+    # if kwh_per_t missing, use predicted
+    if np.isfinite(kwh_per_t):
+        cur_kwh_t = kwh_per_t
+    else:
+        cur_kwh_t = pred_kwh_t if np.isfinite(pred_kwh_t) else target_kwh_t
+
+    # tie "progress_pct" with target energy notion
+    # estimated final (kWh/t) = cur / (progress/100)
+    est_final_kwh_t = np.nan
+    if progress_pct > 5:
+        est_final_kwh_t = cur_kwh_t / (progress_pct / 100.0)
+
+    # Remaining specific energy to reach target
+    rem_kwh_t = max(target_kwh_t - cur_kwh_t, 0.0) if np.isfinite(cur_kwh_t) else np.nan
+
+    # power estimate (MW) from last heat energy/duration
+    power_mw = np.nan
+    if np.isfinite(elec_energy_kwh) and np.isfinite(duration_min) and duration_min > 1:
+        power_mw = (elec_energy_kwh / (duration_min / 60.0)) / 1000.0  # MW
+
+    # remaining time estimate
+    rem_min = np.nan
+    if np.isfinite(rem_kwh_t) and np.isfinite(tap_weight_t) and tap_weight_t > 0 and np.isfinite(power_mw) and power_mw > 0.1:
+        rem_kwh = rem_kwh_t * tap_weight_t
+        rem_min = (rem_kwh / (power_mw * 1000.0)) * 60.0
+
+    # Tap readiness (0-100)
+    temp_term = 0.0
+    if np.isfinite(pred_tap_temp):
+        temp_term = 1.0 - _clamp(abs(pred_tap_temp - target_tap_temp) / 40.0, 0.0, 1.0)
+    readiness = 100.0 * _clamp(0.55 * (progress_pct / 100.0) + 0.25 * arc_score + 0.20 * temp_term, 0.0, 1.0)
+
+    # Advisory text
+    headline, bullets = _compose_advisory(
+        cosphi_f=cosphi_f,
+        cosphi_lf=cosphi_lf,
+        flicker=flicker,
+        arc_label=arc_label,
+        panel_dt=panel_dt,
+        progress_pct=progress_pct,
+        tap_pred_temp=pred_tap_temp,
+        target_tap_temp=target_tap_temp,
+    )
+
+    # --- TOP KPIs ---
+    st.markdown("### 📌 Özet Durum")
+    a, b, c, d, e = st.columns([1.1, 1.1, 1.1, 1.1, 1.3])
+
+    a.metric("Efficiency Index", f"{eff_idx:.2f}")
+    b.metric("Tap Readiness", f"{readiness:.0f}%")
+    c.metric("Ark Durumu", arc_label)
+    d.metric("cosφ (Ocak)", f"{cosphi_f:.2f}")
+    e.metric("Döküme kalan (AI)", f"{rem_min:.0f} dk" if np.isfinite(rem_min) else "-")
+
+    st.markdown("---")
+
+    # --- Energy/Enthalpy cards ---
+    st.markdown("### 🔥 Enerji & Entalpi Görünümü")
+    c1, c2, c3, c4 = st.columns(4)
+
+    elec_str = f"{elec_energy_kwh:,.0f} kWh" if np.isfinite(elec_energy_kwh) else "-"
+    chem_str = f"{chem_kwh:,.0f} kWh" if np.isfinite(chem_kwh) else "-"
+    tot_str = f"{total_in_kwh:,.0f} kWh" if np.isfinite(total_in_kwh) else "-"
+    tot_t_str = f"{total_in_kwh_t:.1f} kWh/t" if np.isfinite(total_in_kwh_t) else "-"
+
+    c1.metric("Elektrik Enerjisi", elec_str)
+    c2.metric("Kimyasal Enerji (tah.)", chem_str)
+    c3.metric("Toplam Entalpi (input)", tot_str)
+    c4.metric("Toplam (kWh/t)", tot_t_str)
+
+    # progress / target
+    st.caption(f"Hedef: **{target_kwh_t:.0f} kWh/t** · Hedef Tap: **{target_tap_temp:.0f}°C** · Aşama: **{st.session_state.fe_heat_stage}**")
+
+    # --- Prediction section ---
+    st.markdown("### 🤖 AI Projeksiyon (Döküme kadar)")
+    p1, p2, p3, p4 = st.columns(4)
+    p1.metric("Tahmini final kWh/t", f"{est_final_kwh_t:.1f}" if np.isfinite(est_final_kwh_t) else "-")
+    p2.metric("Model kWh/t (AI)", f"{pred_kwh_t:.1f}" if np.isfinite(pred_kwh_t) else "-")
+    p3.metric("Model Tap T (AI)", f"{pred_tap_temp:.0f} °C" if np.isfinite(pred_tap_temp) else "-")
+    p4.metric("Flicker", f"{flicker:.0f}/100")
+
+    # --- Loss breakdown chart ---
+    st.markdown("### 📉 Enerji Dağılımı (tahmini)")
+    loss_df = pd.DataFrame({"Bucket": list(losses.keys()), "kWh": list(losses.values())})
+    ch = (
+        alt.Chart(loss_df)
+        .mark_bar()
+        .encode(
+            x=alt.X("kWh:Q", title="kWh"),
+            y=alt.Y("Bucket:N", sort="-x", title=None),
+            tooltip=["Bucket:N", alt.Tooltip("kWh:Q", format=",.0f")],
+        )
+        .properties(height=220)
+    )
+    st.altair_chart(ch, use_container_width=True)
+
+    # --- Chemical breakdown mini table ---
+    with st.expander("🧪 Kimyasal Enerji kırılımı (tahmini)", expanded=False):
+        st.table(pd.DataFrame([
+            {"Kalem": "Doğalgaz", "kWh": f"{chem_break['NG_kWh']:,.0f}"},
+            {"Kalem": "Karbon", "kWh": f"{chem_break['C_kWh']:,.0f}"},
+            {"Kalem": "O₂ (proxy)", "kWh": f"{chem_break['O2_proxy_kWh']:,.0f}"},
+            {"Kalem": "Toplam", "kWh": f"{chem_break['Total_kWh']:,.0f}"},
+        ]))
+
+    # --- Advisory block ---
+    st.markdown("### 🧠 AI Önerisi (sadece tavsiye)")
+    if arc_label.startswith("🔴") or cosphi_f < 0.85 or flicker > 70 or panel_dt > 28:
+        st.warning(headline)
+    else:
+        st.success(headline)
+
+    for btxt in bullets[:6]:
+        st.write(f"• {btxt}")
+
+    st.markdown("---")
+
+    # --- Quick “Power Quality” table ---
+    st.markdown("### ⚙️ Power Quality – Ocak & Pota (özet)")
+    pq_rows = [
+        {"Bölüm": "Ocak", "cosφ": f"{cosphi_f:.2f}", "Flicker": f"{flicker:.0f}/100", "Panel ΔT": f"{panel_dt:.1f} °C", "Slag Foaming": f"{slag_foaming:.1f}/10"},
+        {"Bölüm": "Pota/LF", "cosφ": f"{cosphi_lf:.2f}", "Flicker": "-", "Panel ΔT": "-", "Slag Foaming": "-"},
+    ]
+    st.table(pq_rows)
+
+    # Optional: show last row context
+    with st.expander("Son ölçüm (ham)", expanded=False):
+        show_cols = [c for c in ["timestamp_dt", "heat_id", "tap_weight_t", "duration_min", "energy_kwh", "kwh_per_t", "tap_temp_c", "o2_flow_nm3h", "slag_foaming_index", "panel_delta_t_c"] if c in df.columns]
+        st.dataframe(df.tail(1)[show_cols], use_container_width=True)
+
+
+# =========================================================
 # 3) ARC OPTIMIZER
 # =========================================================
 def show_arc_optimizer_page(sim_mode: bool):
@@ -1313,6 +1781,7 @@ def show_hse_vision_demo_page(sim_mode: bool):
     else:
         st.success("✅ Aktif bir güvenlik riski tespit edilmedi.")
 
+
 # =========================================================
 # LAB – Simülasyon / Adhoc (İleri seviye)
 # =========================================================
@@ -1403,7 +1872,7 @@ def show_lab_simulation(sim_mode: bool):
 
 
 # =========================================================
-# SIDEBAR: NAV + HIZLI SİM AKIŞ  (Persona kaldırıldı)
+# SIDEBAR: NAV + HIZLI SİM AKIŞ
 # =========================================================
 def sidebar_controls():
     st.markdown("### FeCr AI")
@@ -1422,12 +1891,13 @@ def sidebar_controls():
 
     st.divider()
 
+    pages = ["Setup", "Canlı Veri", "Ocak Verim & Enerji", "ArcOptimizer", "Lab (Advanced)", "HSE Vision (Demo)"]
+    default_idx = pages.index(st.session_state.classic_page) if st.session_state.classic_page in pages else 3
+
     st.selectbox(
         "Sayfa",
-        ["Setup", "Canlı Veri", "ArcOptimizer", "Lab (Advanced)", "HSE Vision (Demo)"],
-        index=["Setup", "Canlı Veri", "ArcOptimizer", "Lab (Advanced)", "HSE Vision (Demo)"].index(st.session_state.classic_page)
-        if st.session_state.classic_page in ["Setup", "Canlı Veri", "ArcOptimizer", "Lab (Advanced)", "HSE Vision (Demo)"]
-        else 2,
+        pages,
+        index=default_idx,
         key="classic_page",
     )
 
@@ -1476,6 +1946,8 @@ def main():
         show_setup_form()
     elif page == "Canlı Veri":
         show_runtime_page(sim_mode)
+    elif page == "Ocak Verim & Enerji":
+        show_furnace_efficiency_page(sim_mode)
     elif page == "ArcOptimizer":
         show_arc_optimizer_page(sim_mode)
     elif page == "HSE Vision (Demo)":
