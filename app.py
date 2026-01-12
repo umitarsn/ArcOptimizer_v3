@@ -3,10 +3,9 @@ import os
 import json
 import random
 import base64
-import base64
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
-from typing import Optional, Tuple, Dict, Any, List
+from typing import Optional, List
 
 import numpy as np
 import pandas as pd
@@ -26,7 +25,7 @@ st.set_page_config(
     layout="wide",
 )
 
-# ✅ Sidebar genişlik fix
+# Sidebar genişlik fix
 st.markdown(
     """
     <style>
@@ -83,9 +82,7 @@ def _init_state():
         "model_train_count": 0,
         "model_last_trained_rows_marker": 0,
         # ui
-        "view_mode": "Persona",
-        "persona": "Plant Manager",
-        "classic_page": "ArcOptimizer",
+        "page": "ArcOptimizer",
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -96,7 +93,7 @@ _init_state()
 
 
 # =========================================================
-# WIDGET BIND HELPERS (duplicate key fix)
+# WIDGET BIND HELPERS
 # =========================================================
 def bind_toggle(label: str, state_key: str, widget_key: str, help_text: Optional[str] = None):
     def _sync():
@@ -111,39 +108,7 @@ def bind_toggle(label: str, state_key: str, widget_key: str, help_text: Optional
     )
 
 
-def bind_slider_int(
-    label: str,
-    state_key: str,
-    widget_key: str,
-    min_v: int,
-    max_v: int,
-    step: int = 1,
-    help_text: Optional[str] = None,
-):
-    def _sync():
-        st.session_state[state_key] = int(st.session_state[widget_key])
-
-    return st.slider(
-        label,
-        min_value=min_v,
-        max_value=max_v,
-        value=int(st.session_state.get(state_key, min_v)),
-        step=step,
-        key=widget_key,
-        help=help_text,
-        on_change=_sync,
-    )
-
-
-def bind_number_int(
-    label: str,
-    state_key: str,
-    widget_key: str,
-    min_v: int,
-    max_v: int,
-    step: int = 1,
-    help_text: Optional[str] = None,
-):
+def bind_number_int(label: str, state_key: str, widget_key: str, min_v: int, max_v: int, step: int = 1, help_text: Optional[str] = None):
     def _sync():
         st.session_state[state_key] = int(st.session_state[widget_key])
 
@@ -386,9 +351,15 @@ def to_df(data_source):
         return pd.DataFrame()
 
     df = pd.DataFrame(data_source).copy()
+
+    # ✅ Türkiye saati güvenli parse
     if "timestamp" in df.columns:
         try:
-            df["timestamp_dt"] = pd.to_datetime(df["timestamp"], utc=True).dt.tz_convert(TZ)
+            ts = pd.to_datetime(df["timestamp"], errors="coerce")
+            if getattr(ts.dt, "tz", None) is None:
+                df["timestamp_dt"] = ts.dt.tz_localize(TZ)
+            else:
+                df["timestamp_dt"] = ts.dt.tz_convert(TZ)
         except Exception:
             df["timestamp_dt"] = pd.to_datetime(df["timestamp"], errors="coerce")
     else:
@@ -831,17 +802,16 @@ def show_setup_form():
                 if onem == 1:
                     required_fields += 1
 
-    with st.sidebar:
-        st.subheader("📊 Setup Veri Giriş Durumu")
-        pct_all = round(100 * total_filled / total_fields, 1) if total_fields else 0
-        pct_req = round(100 * required_filled / required_fields, 1) if required_fields else 0
-        st.metric("Toplam Giriş Oranı", f"{pct_all}%")
-        st.progress(min(pct_all / 100, 1.0))
-        st.metric("Zorunlu Veri Girişi", f"{pct_req}%")
-        st.progress(min(pct_req / 100, 1.0))
-        eksik = required_fields - required_filled
-        if eksik > 0:
-            st.warning(f"❗ Eksik Zorunlu Değerler: {eksik}")
+    st.subheader("📊 Setup Veri Giriş Durumu")
+    pct_all = round(100 * total_filled / total_fields, 1) if total_fields else 0
+    pct_req = round(100 * required_filled / required_fields, 1) if required_fields else 0
+    st.metric("Toplam Giriş Oranı", f"{pct_all}%")
+    st.progress(min(pct_all / 100, 1.0))
+    st.metric("Zorunlu Veri Girişi", f"{pct_req}%")
+    st.progress(min(pct_req / 100, 1.0))
+    eksik = required_fields - required_filled
+    if eksik > 0:
+        st.warning(f"❗ Eksik Zorunlu Değerler: {eksik}")
 
 
 # =========================================================
@@ -932,7 +902,7 @@ def show_runtime_page(sim_mode: bool):
 # 3) ARC OPTIMIZER
 # =========================================================
 def show_arc_optimizer_page(sim_mode: bool):
-    st.markdown("## 3. Arc Optimizer – Trendler, KPI ve Öneriler")
+    st.markdown("## Arc Optimizer – Trendler, KPI ve Öneriler")
     if sim_mode:
         st.info("🧪 Simülasyon Modu Aktif. Arc Optimizer çıktıları simüle edilen veri üzerinden hesaplanır.")
 
@@ -1051,70 +1021,16 @@ def show_arc_optimizer_page(sim_mode: bool):
                 f"Toplam eğitim: {st.session_state.model_train_count}"
             )
 
-    st.markdown("---")
-    st.markdown("### 🧪 What-if Simülasyonu (Arc Optimizer)")
-
-    model, feat_cols, target_cols = load_arc_model()
-    if model is None or feat_cols is None:
-        st.info("What-if için önce modeli eğitin (en az ~20 şarj).")
-    else:
-        last_row = df.iloc[-1]
-
-        def num_input(name, col, min_v, max_v, step, fmt="%.1f"):
-            raw = last_row.get(col, (min_v + max_v) / 2)
-            try:
-                v = float(raw)
-            except Exception:
-                v = float((min_v + max_v) / 2)
-            v = max(min_v, min(v, max_v))
-            return st.number_input(name, min_v, max_v, v, step=step, format=fmt, key=f"whatif_{col}")
-
-        w1, w2 = st.columns(2)
-        with w1:
-            tap_weight = num_input("Tap Weight (t)", "tap_weight_t", 20.0, 60.0, 0.5)
-            duration = num_input("Süre (dk)", "duration_min", 30.0, 90.0, 1.0, "%.0f")
-            energy = num_input("Enerji (kWh)", "energy_kwh", 500.0, 30000.0, 50.0)
-            o2_flow = num_input("O2 (Nm³/h)", "o2_flow_nm3h", 300.0, 3000.0, 10.0)
-        with w2:
-            slag = num_input("Slag Foaming (0–10)", "slag_foaming_index", 0.0, 10.0, 0.5)
-            panel_dT = num_input("Panel ΔT (°C)", "panel_delta_t_c", 0.0, 60.0, 0.5)
-            elec = num_input("Elektrot (kg/şarj)", "electrode_kg_per_heat", 0.5, 6.0, 0.05)
-
-        if st.button("Simülasyonu Çalıştır", key="btn_run_whatif"):
-            inp = {
-                "tap_weight_t": tap_weight,
-                "duration_min": duration,
-                "energy_kwh": energy,
-                "o2_flow_nm3h": o2_flow,
-                "slag_foaming_index": slag,
-                "panel_delta_t_c": panel_dT,
-                "electrode_kg_per_heat": elec,
-            }
-            row_df = pd.DataFrame([inp])[feat_cols].fillna(0.0)
-            try:
-                preds = model.predict(row_df)[0]
-                pred_dict = dict(zip(target_cols, preds))
-                kwh_pred = float(pred_dict.get("kwh_per_t", float("nan")))
-                tap_pred = float(pred_dict.get("tap_temp_c", float("nan")))
-                r1, r2 = st.columns(2)
-                r1.metric("AI kWh/t", f"{kwh_pred:.1f}" if np.isfinite(kwh_pred) else "-")
-                r2.metric("AI Tap T", f"{tap_pred:.0f} °C" if np.isfinite(tap_pred) else "-")
-            except Exception as e:
-                st.error(f"Tahmin hatası: {e}")
-
 
 # =========================================================
-# ✅ NEW: HSE Vision (Demo) — cv2 YOK (HTML overlay)
+# 4) HSE Vision (Demo)
 # =========================================================
 def show_hse_vision_demo_page(sim_mode: bool):
     st.markdown("## 🦺 HSE Vision (Demo) – Kamera & Risk Değerlendirme")
     st.caption("Pilot demo – görüntü işleme simülasyonu + proses önsezisi (PoC)")
 
-    # =========================
-    # VIDEO (persist)
-    # =========================
     st.markdown("### 🎥 Kamera / Görüntü")
-    up = st.file_uploader("Video yükle (mp4 / mov)", type=["mp4", "mov", "m4v"])
+    up = st.file_uploader("Video yükle (mp4 / mov)", type=["mp4", "mov", "m4v"], key="hse_uploader")
 
     if up is not None:
         st.session_state.hse_video_bytes = up.getvalue()
@@ -1128,9 +1044,6 @@ def show_hse_vision_demo_page(sim_mode: bool):
     b64 = base64.b64encode(st.session_state.hse_video_bytes).decode("utf-8")
     mime = st.session_state.get("hse_video_mime") or "video/mp4"
 
-    # =========================
-    # RİSK TİPLERİ + DEMO TETİKLER
-    # =========================
     RISK_TYPES = [
         "SLAG / SPLASH",
         "Yük altında çalışma",
@@ -1145,18 +1058,15 @@ def show_hse_vision_demo_page(sim_mode: bool):
     st.markdown("### 👷 Davranış & PPE (Demo Kontrolleri)")
     c0, c1, c2, c3 = st.columns([1.5, 1, 1, 1])
     with c0:
-        risk_tipi = st.selectbox("Risk tipi", RISK_TYPES, index=0)
+        risk_tipi = st.selectbox("Risk tipi", RISK_TYPES, index=0, key="hse_risk_type")
     with c1:
-        kisi_yaklasiyor = st.toggle("Kişi yaklaşıyor", value=True)
+        kisi_yaklasiyor = st.toggle("Kişi yaklaşıyor", value=True, key="hse_approach")
     with c2:
-        kisi_bolgede = st.toggle("Kişi riskli bölgede", value=True)
+        kisi_bolgede = st.toggle("Kişi riskli bölgede", value=True, key="hse_in_zone")
     with c3:
-        baret_yok = st.toggle("Baret yok", value=False)
+        baret_yok = st.toggle("Baret yok", value=False, key="hse_no_helmet")
 
-    # =========================
-    # GENEL RİSK SKORU (0–100) + Olasılık/Süre (demo mantığı)
-    # =========================
-    # Risk tipi baz ağırlık
+    # Risk skoru (0–100) – PoC
     type_weight = {
         "SLAG / SPLASH": 25,
         "Yük altında çalışma": 30,
@@ -1168,7 +1078,6 @@ def show_hse_vision_demo_page(sim_mode: bool):
         "LOTO / enerji izolasyonu ihlali": 26,
     }.get(risk_tipi, 20)
 
-    # Tetik ağırlıkları
     score = 10 + type_weight
     if kisi_yaklasiyor:
         score += 15
@@ -1176,14 +1085,10 @@ def show_hse_vision_demo_page(sim_mode: bool):
         score += 35
     if baret_yok:
         score += 20
-
-    # clamp
     score = int(max(0, min(100, score)))
 
-    # Olasılık (skordan türet) – demo
+    # Olasılık / süre
     olasilik = int(max(1, min(99, round(score * 0.9))))
-
-    # Tahmini süre – demo
     if kisi_bolgede:
         tmin, tmax = (45, 90)
     elif kisi_yaklasiyor:
@@ -1191,7 +1096,6 @@ def show_hse_vision_demo_page(sim_mode: bool):
     else:
         tmin, tmax = (120, 200)
 
-    # Durum / eşikler
     if score >= 75:
         durum = "🔴 KRİTİK"
         alarm = True
@@ -1214,47 +1118,27 @@ def show_hse_vision_demo_page(sim_mode: bool):
         alarm = False
         sorun_metni = None
 
-    # =========================
-    # AI TAHMİN: şimdi → +15dk (kesikli)
-    # =========================
-    horizon_min = 15
-    step = 1  # dk
-
+    # Risk trend: aktüel + AI tahmin (15 dk)
     now = datetime.now(TZ)
+    horizon_min = 15
+    drift = +2.4 if kisi_bolgede else (+1.2 if (kisi_yaklasiyor or baret_yok) else -1.8)
 
-    # Basit öngörü mantığı (demo):
-    # - Eğer kişi riskli bölgede ise risk artma eğiliminde
-    # - Sadece yaklaşıyorsa yavaş artar
-    # - Hiçbiri yoksa düşer
-    if kisi_bolgede:
-        drift = +2.4
-    elif kisi_yaklasiyor or baret_yok:
-        drift = +1.2
-    else:
-        drift = -1.8
-
-    # "Aktüel" (son 6 dk) — kullanıcıya “trend” hissi verir
     actual_points = []
     for i in range(6, -1, -1):
         t = now - timedelta(minutes=i)
-        # Aktüel: bugünkü skoru hafif dalgalandır
         v = score - int(0.6 * i) + (1 if (i % 3 == 0) else 0)
         v = int(max(0, min(100, v)))
         actual_points.append({"ts": t, "risk": v, "type": "Aktüel"})
 
-    # "Potansiyel (AI)" — şimdi sonrası
     future_points = []
     v = float(score)
-    for m in range(0, horizon_min + 1, step):
+    for m in range(0, horizon_min + 1, 1):
         t = now + timedelta(minutes=m)
-        v = v + drift  # demo drift
-        # sınırla ve çok uçmasın diye yumuşat
-        v = max(0.0, min(100.0, v))
+        v = max(0.0, min(100.0, v + drift))
         future_points.append({"ts": t, "risk": float(v), "type": "Potansiyel (AI)"})
 
-    risk_df = pd.DataFrame(actual_points + future_points).copy()
+    risk_df = pd.DataFrame(actual_points + future_points)
 
-    # Kritik eşik zamanı (ilk geçtiği an)
     critical_threshold = 75
     crit_time = None
     for row in future_points:
@@ -1262,13 +1146,9 @@ def show_hse_vision_demo_page(sim_mode: bool):
             crit_time = row["ts"]
             break
 
-    # =========================
-    # LAYOUT: VIDEO | PANEL
-    # =========================
     left, right = st.columns([2.2, 1.3])
 
     with left:
-        # Autoplay: muted gerekli (özellikle iOS/Chrome)
         components.html(
             f"""
             <video autoplay muted loop controls playsinline
@@ -1281,10 +1161,8 @@ def show_hse_vision_demo_page(sim_mode: bool):
 
     with right:
         st.markdown("### 🧠 Genel HSE Risk Skoru")
-        st.metric("Risk Skoru (0–100)", f"{score}", help="PoC: Risk tipi + bölge + PPE + davranış tetiklerinden türetilen birleşik skor.")
-        st.caption("Aktüel (son dakikalar) + AI tahmini (şimdiden sonra)")
+        st.metric("Risk Skoru (0–100)", f"{score}")
 
-        # Trend grafiği (ArcOptimizer hissi)
         ch = (
             alt.Chart(risk_df)
             .mark_line()
@@ -1301,17 +1179,12 @@ def show_hse_vision_demo_page(sim_mode: bool):
         )
 
         layers = [ch]
-
-        # kritik eşik çizgisi (yatay)
         thr_df = pd.DataFrame({"y": [critical_threshold]})
-        thr = alt.Chart(thr_df).mark_rule(strokeDash=[4, 4], color="red").encode(y="y:Q")
-        layers.append(thr)
+        layers.append(alt.Chart(thr_df).mark_rule(strokeDash=[4, 4], color="red").encode(y="y:Q"))
 
-        # kritik zaman çizgisi (dikey)
         if crit_time is not None:
             ct = pd.DataFrame({"ts": [crit_time]})
-            ct_rule = alt.Chart(ct).mark_rule(strokeDash=[6, 4], color="red").encode(x="ts:T")
-            layers.append(ct_rule)
+            layers.append(alt.Chart(ct).mark_rule(strokeDash=[6, 4], color="red").encode(x="ts:T"))
             st.caption(f"⏱️ Tahmini kritik eşik zamanı: **{crit_time.strftime('%H:%M')}**")
 
         st.altair_chart(alt.layer(*layers), use_container_width=True)
@@ -1324,13 +1197,9 @@ def show_hse_vision_demo_page(sim_mode: bool):
             {"Parametre": "Durum", "Değer": durum},
         ])
 
-    # =========================
-    # SORUN & ALARM
-    # =========================
     st.markdown("---")
     if sorun_metni:
         st.error(f"⚠️ **TESPİT EDİLEN SORUN**\n\n{sorun_metni}")
-
         if alarm:
             components.html(
                 """
@@ -1344,131 +1213,9 @@ def show_hse_vision_demo_page(sim_mode: bool):
     else:
         st.success("✅ Aktif bir güvenlik riski tespit edilmedi.")
 
-    # =========================
-    # DEMO RİSK HESABI (basit & anlaşılır)
-    # =========================
-    base_prob_map = {
-        "SLAG / SPLASH": 72,
-        "Yük altında çalışma": 85,
-        "Sabitlenmemiş yük / düşen parça": 78,
-        "Baretsiz giriş": 55,
-        "Yetkisiz riskli bölgeye giriş": 65,
-        "Sıcak yüzey / yanık riski": 60,
-        "Forklift–yaya yakınlaşma": 80,
-        "LOTO / enerji izolasyonu ihlali": 75,
-    }
-
-    base_prob = int(base_prob_map.get(risk_tipi, 60))
-
-    # Duruma göre olasılığı modüle et (demo)
-    olasilik = base_prob
-    if not kisi_bolgede and kisi_yaklasiyor:
-        olasilik = max(20, base_prob - 35)
-    if baret_yok and risk_tipi in ["Baretsiz giriş", "Yetkisiz riskli bölgeye giriş"]:
-        olasilik = min(95, olasilik + 20)
-
-    # Tahmini süre (demo)
-    if kisi_bolgede:
-        tmin, tmax = (45, 90)
-    elif kisi_yaklasiyor:
-        tmin, tmax = (90, 150)
-    else:
-        tmin, tmax = (120, 200)
-
-    # Kritik eşik
-    if kisi_bolgede and olasilik >= 70:
-        durum = "🔴 KRİTİK"
-        alarm = True
-        sorun_metni = (
-            f"{risk_tipi} riski yüksek.\n"
-            f"Personel riskli bölgede tespit edildi.\n"
-            "Derhal alanın boşaltılması ve bariyer kontrolü önerilir."
-        )
-    elif kisi_yaklasiyor or baret_yok or olasilik >= 55:
-        durum = "🟡 DİKKAT"
-        alarm = False
-        sorun_metni = (
-            f"Olası risk: {risk_tipi}.\n"
-            "Personel yaklaşımı / PPE uygunsuzluğu izleniyor."
-        )
-    else:
-        durum = "🟢 NORMAL"
-        alarm = False
-        sorun_metni = None
-
-    # =========================
-    # LAYOUT: VIDEO | RİSK TABLOSU
-    # =========================
-    left, right = st.columns([2.2, 1.3])
-
-    with left:
-        # Autoplay: iOS/Chrome çoğu zaman "muted" ister, o yüzden muted
-        components.html(
-            f"""
-            <video autoplay muted loop controls playsinline
-                   style="width:100%; border-radius:14px; background:#000;">
-              <source src="data:{mime};base64,{b64}" type="{mime}">
-            </video>
-            """,
-            height=520,
-        )
-
-    with right:
-        st.markdown("### 📊 Risk Değerlendirme")
-        st.table([
-            {"Parametre": "Risk Tipi", "Değer": risk_tipi},
-            {"Parametre": "Olasılık", "Değer": f"%{olasilik}"},
-            {"Parametre": "Tahmini Süre", "Değer": f"{tmin}–{tmax} sn"},
-            {"Parametre": "Durum", "Değer": durum},
-        ])
-
-        st.markdown("#### 🔎 Not (Demo Mantığı)")
-        st.caption("Bu PoC’ta CV yerine tetikleyiciler simüle edilir. Gerçekte: kamera + bölge + PPE + proses sinyali birleşir.")
-
-    # =========================
-    # SORUN & ALARM
-    # =========================
-    st.markdown("---")
-    if sorun_metni:
-        st.error(f"⚠️ **TESPİT EDİLEN SORUN**\n\n{sorun_metni}")
-
-        # Alarm: yalnızca KRİTİK’te çalsın
-        if alarm:
-            components.html(
-                """
-                <audio autoplay>
-                  <source src="https://actions.google.com/sounds/v1/alarms/alarm_clock.ogg" type="audio/ogg">
-                </audio>
-                """,
-                height=0,
-            )
-            st.warning("🔊 ALARM AKTİF – KRİTİK İSG RİSKİ")
-    else:
-        st.success("✅ Aktif bir güvenlik riski tespit edilmedi.")
-
-    # =========================
-    # SORUN & ALARM
-    # =========================
-    st.markdown("---")
-
-    if sorun_metni:
-        st.error(f"⚠️ **TESPİT EDİLEN SORUN**\n\n{sorun_metni}")
-
-        if alarm:
-            components.html(
-                """
-                <audio autoplay>
-                  <source src="https://actions.google.com/sounds/v1/alarms/alarm_clock.ogg" type="audio/ogg">
-                </audio>
-                """,
-                height=0,
-            )
-            st.warning("🔊 ALARM AKTİF – KRİTİK İSG RİSKİ")
-    else:
-        st.success("✅ Aktif bir güvenlik riski tespit edilmedi.")
 
 # =========================================================
-# LAB – Simülasyon / Adhoc (İleri seviye)
+# 5) LAB (Advanced)
 # =========================================================
 def show_lab_simulation(sim_mode: bool):
     st.markdown("## Lab – Simülasyon / Adhoc Analiz (İleri Seviye)")
@@ -1557,132 +1304,6 @@ def show_lab_simulation(sim_mode: bool):
 
 
 # =========================================================
-# PERSONA SAYFALARI
-# =========================================================
-def show_exec_page(sim_mode: bool):
-    st.markdown("## Executive (CEO / CFO) – Value & Risk")
-    df = to_df(get_active_data(sim_mode))
-    if df.empty:
-        st.info("Veri yok.")
-        return
-
-    m = money_pack(df)
-    a1, a2, a3, a4 = st.columns(4)
-    a1.metric("Tahmini €/t", f"{m['eur_per_t']:.2f}")
-    a2.metric("Tahmini €/yıl", f"{m['eur_per_year']:,.0f}")
-    a3.metric("Model", "Ready" if os.path.exists(MODEL_SAVE_PATH) else "Needs training")
-    a4.metric("Veri (şarj)", f"{len(df)}")
-
-    st.markdown("### 24h Trend + AI")
-    model, feat_cols, target_cols = load_arc_model()
-    build_24h_actual_vs_ai_chart(df, model, feat_cols, target_cols, height=320)
-
-    st.markdown("### Özet (Dağılım)")
-    summ = distro_summary(df)
-    if not summ.empty:
-        st.table(summ)
-
-
-def show_plant_manager_page(sim_mode: bool):
-    st.markdown("## Plant Manager – KPI & Performans Özeti")
-    df = to_df(get_active_data(sim_mode))
-    if df.empty:
-        st.info("Veri yok.")
-        return
-
-    kpi = kpi_pack(df)
-    m = money_pack(df)
-
-    top1, top2, top3, top4 = st.columns(4)
-    top1.metric("İzlenen Şarj", f"{kpi['rows']}")
-    top2.metric("Son10 kWh/t", f"{kpi['avg_kwh_t_10']:.1f}" if not np.isnan(kpi["avg_kwh_t_10"]) else "-")
-    top3.metric("Son10 Elektrot kg/t", f"{kpi['avg_elec_pt_10']:.3f}" if not np.isnan(kpi["avg_elec_pt_10"]) else "-")
-    top4.metric("Potansiyel (€/t)", f"{m['eur_per_t']:.2f}")
-
-    st.markdown("### 24h Trend + AI")
-    model, feat_cols, target_cols = load_arc_model()
-    build_24h_actual_vs_ai_chart(df, model, feat_cols, target_cols, height=360)
-
-    st.markdown("### Dağılım Özeti")
-    summ = distro_summary(df)
-    if not summ.empty:
-        st.table(summ)
-
-
-def show_operator_page(sim_mode: bool):
-    st.markdown("## Engineer / Operator – Batch Dashboard")
-    df = to_df(get_active_data(sim_mode))
-    if df.empty:
-        st.info("Veri yok.")
-        return
-
-    left, right = st.columns([1.2, 2.8])
-
-    with left:
-        st.markdown("### Batch Listesi")
-        show = df[["timestamp_dt", "heat_id"]].dropna().tail(200).copy()
-        show["label"] = show["heat_id"].astype(str) + " · " + show["timestamp_dt"].dt.strftime("%d.%m %H:%M")
-        labels = show["label"].tolist()
-        if not labels:
-            st.info("Liste boş.")
-            return
-        sel = st.selectbox("Seç", labels, index=len(labels) - 1, key="op_batch_sel")
-        sel_heat = sel.split(" · ")[0].strip()
-
-    with right:
-        st.markdown("### Batch Özeti")
-        row = df[df["heat_id"] == sel_heat].tail(1)
-        if row.empty:
-            st.info("Batch bulunamadı.")
-            return
-        r = row.iloc[0]
-
-        k1, k2, k3, k4 = st.columns(4)
-        k1.metric("kWh/t", f"{float(r.get('kwh_per_t')):.1f}" if pd.notna(r.get("kwh_per_t")) else "-")
-        k2.metric("Tap T", f"{float(r.get('tap_temp_c')):.0f} °C" if pd.notna(r.get("tap_temp_c")) else "-")
-        k3.metric("Elektrot", f"{float(r.get('electrode_kg_per_heat')):.2f} kg/şarj" if pd.notna(r.get("electrode_kg_per_heat")) else "-")
-        k4.metric("Panel ΔT", f"{float(r.get('panel_delta_t_c')):.1f} °C" if pd.notna(r.get("panel_delta_t_c")) else "-")
-
-        st.markdown("#### Trend (son 100)")
-        tmp = df.tail(100)
-        use_cols = [c for c in ["kwh_per_t", "tap_temp_c", "panel_delta_t_c", "slag_foaming_index"] if c in tmp.columns]
-        if use_cols:
-            long = tmp[["timestamp_dt"] + use_cols].melt("timestamp_dt", var_name="var", value_name="val").dropna()
-            var_map = {
-                "kwh_per_t": "kWh/t",
-                "tap_temp_c": "Tap T (°C)",
-                "panel_delta_t_c": "Panel ΔT (°C)",
-                "slag_foaming_index": "Slag Foaming",
-            }
-            long["var_name"] = long["var"].map(var_map).fillna(long["var"])
-            ch = (
-                alt.Chart(long)
-                .mark_line()
-                .encode(
-                    x=alt.X("timestamp_dt:T", title="Zaman", axis=alt.Axis(format="%d.%m %H:%M", labelAngle=-35)),
-                    y=alt.Y("val:Q", title=None),
-                    color=alt.Color("var_name:N", title=None, legend=alt.Legend(orient="top", direction="horizontal")),
-                )
-                .properties(height=320)
-            )
-            st.altair_chart(ch.interactive(), use_container_width=True)
-        else:
-            st.info("Trend için uygun kolon yok.")
-
-        st.markdown("#### Alarmlar (rule)")
-        alarms = []
-        if pd.notna(r.get("panel_delta_t_c")) and float(r.get("panel_delta_t_c")) > 25:
-            alarms.append("• Panel ΔT yüksek (>25°C)")
-        if pd.notna(r.get("slag_foaming_index")) and float(r.get("slag_foaming_index")) >= 9:
-            alarms.append("• Slag foaming aşırı (≥9)")
-        if pd.notna(r.get("kwh_per_t")) and df["kwh_per_t"].notna().sum() >= 10:
-            ref = df["kwh_per_t"].dropna().tail(10).mean()
-            if float(r.get("kwh_per_t")) > ref * 1.05:
-                alarms.append("• kWh/t son10 ort üstünde (+5%)")
-        st.write("\n".join(alarms) if alarms else "✅ Alarm yok")
-
-
-# =========================================================
 # SIDEBAR: NAV + HIZLI SİM AKIŞ
 # =========================================================
 def sidebar_controls():
@@ -1702,34 +1323,12 @@ def sidebar_controls():
 
     st.divider()
 
-    st.radio(
-        "Görünüm",
-        ["Persona", "Klasik Sayfalar"],
-        index=0 if st.session_state.view_mode == "Persona" else 1,
-        key="view_mode",
-    )
-
-    if st.session_state.view_mode == "Persona":
-        st.selectbox(
-            "Persona",
-            ["CEO / CFO", "Plant Manager", "Engineer / Operator", "Lab (Advanced)"],
-            index=["CEO / CFO", "Plant Manager", "Engineer / Operator", "Lab (Advanced)"].index(st.session_state.persona),
-            key="persona",
-        )
-    else:
-        st.selectbox(
-            "Sayfa",
-            ["Setup", "Canlı Veri", "ArcOptimizer", "Lab (Advanced)", "HSE Vision (Demo)"],
-            index=["Setup", "Canlı Veri", "ArcOptimizer", "Lab (Advanced)", "HSE Vision (Demo)"].index(st.session_state.classic_page)
-            if st.session_state.classic_page in ["Setup", "Canlı Veri", "ArcOptimizer", "Lab (Advanced)", "HSE Vision (Demo)"]
-            else 2,
-            key="classic_page",
-        )
+    pages = ["Setup", "Canlı Veri", "ArcOptimizer", "HSE Vision (Demo)", "Lab (Advanced)"]
+    st.selectbox("Sayfa", pages, index=pages.index(st.session_state.page) if st.session_state.page in pages else 2, key="page")
 
     st.divider()
 
-    is_lab = (st.session_state.view_mode == "Persona" and st.session_state.persona == "Lab (Advanced)") or \
-             (st.session_state.view_mode != "Persona" and st.session_state.classic_page == "Lab (Advanced)")
+    is_lab = st.session_state.page == "Lab (Advanced)"
 
     if sim_mode and (not is_lab):
         st.markdown("### 🔄 Hızlı Akış")
@@ -1767,28 +1366,18 @@ def main():
     with st.sidebar:
         sim_mode = sidebar_controls()
 
-    if st.session_state.view_mode == "Persona":
-        p = st.session_state.persona
-        if p == "CEO / CFO":
-            show_exec_page(sim_mode)
-        elif p == "Plant Manager":
-            show_plant_manager_page(sim_mode)
-        elif p == "Engineer / Operator":
-            show_operator_page(sim_mode)
-        else:
-            show_lab_simulation(sim_mode)
+    page = st.session_state.page
+
+    if page == "Setup":
+        show_setup_form()
+    elif page == "Canlı Veri":
+        show_runtime_page(sim_mode)
+    elif page == "ArcOptimizer":
+        show_arc_optimizer_page(sim_mode)
+    elif page == "HSE Vision (Demo)":
+        show_hse_vision_demo_page(sim_mode)
     else:
-        page = st.session_state.classic_page
-        if page == "Setup":
-            show_setup_form()
-        elif page == "Canlı Veri":
-            show_runtime_page(sim_mode)
-        elif page == "ArcOptimizer":
-            show_arc_optimizer_page(sim_mode)
-        elif page == "HSE Vision (Demo)":
-            show_hse_vision_demo_page(sim_mode)
-        else:
-            show_lab_simulation(sim_mode)
+        show_lab_simulation(sim_mode)
 
 
 if __name__ == "__main__":
