@@ -1093,12 +1093,15 @@ def show_hse_vision_demo_page(sim_mode: bool):
         st.session_state.hse_video_mime = up.type or "video/mp4"
         st.session_state.hse_video_name = up.name
 
-    if not st.session_state.get("hse_video_bytes"):
-        st.info("Demo videosu yükleyin. (Yükledikten sonra sayfa yenilense bile kalır.)")
-        return
+    has_video = bool(st.session_state.get("hse_video_bytes"))
+    b64 = None
+    mime = None
+    if has_video:
+        b64 = base64.b64encode(st.session_state.hse_video_bytes).decode("utf-8")
+        mime = st.session_state.get("hse_video_mime") or "video/mp4"
 
-    b64 = base64.b64encode(st.session_state.hse_video_bytes).decode("utf-8")
-    mime = st.session_state.get("hse_video_mime") or "video/mp4"
+    if not has_video:
+        st.info("Video yüklenmedi. Demo modunda analiz yine çalışır; video alanı temsili gösterilir.")
 
     RISK_TYPES = [
         "SLAG / SPLASH",
@@ -1217,15 +1220,43 @@ def show_hse_vision_demo_page(sim_mode: bool):
     left, right = st.columns([2.2, 1.3])
 
     with left:
-        components.html(
-            f"""
-            <video autoplay muted loop controls playsinline
-                   style="width:100%; border-radius:14px; background:#000;">
-              <source src="data:{mime};base64,{b64}" type="{mime}">
-            </video>
-            """,
-            height=520,
-        )
+        if has_video:
+            components.html(
+                f"""
+                <video autoplay muted loop controls playsinline
+                       style="width:100%; border-radius:14px; background:#000;">
+                  <source src="data:{mime};base64,{b64}" type="{mime}">
+                </video>
+                """,
+                height=520,
+            )
+        else:
+            components.html(
+                """
+                <div style="
+                    width:100%;
+                    height:520px;
+                    border-radius:14px;
+                    background: linear-gradient(135deg, #111, #333);
+                    display:flex;
+                    align-items:center;
+                    justify-content:center;
+                    color:#fff;
+                    font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto;
+                    text-align:center;
+                    padding:24px;
+                ">
+                  <div>
+                    <div style="font-size:20px; font-weight:800; margin-bottom:8px;">📷 Video yok (Demo Placeholder)</div>
+                    <div style="opacity:0.85; font-size:14px; line-height:1.4;">
+                      Bu ekran normalde kamera görüntüsünü gösterir.<br/>
+                      Video yüklemeden de risk skoru, trend ve alarm mantığı çalışır.
+                    </div>
+                  </div>
+                </div>
+                """,
+                height=520,
+            )
 
     with right:
         st.markdown("### 🧠 Genel HSE Risk Skoru")
@@ -1281,7 +1312,6 @@ def show_hse_vision_demo_page(sim_mode: bool):
             st.warning("🔊 ALARM AKTİF – KRİTİK İSG RİSKİ")
     else:
         st.success("✅ Aktif bir güvenlik riski tespit edilmedi.")
-
 
 # =========================================================
 # LAB – Simülasyon / Adhoc (İleri seviye)
