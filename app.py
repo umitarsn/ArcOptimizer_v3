@@ -98,7 +98,7 @@ _init_state()
 
 
 # =========================================================
-# WIDGET BIND HELPERS (duplicate key fix)
+# WIDGET BIND HELPERS
 # =========================================================
 def bind_toggle(label: str, state_key: str, widget_key: str, help_text: Optional[str] = None):
     def _sync():
@@ -141,7 +141,6 @@ def bind_number_int(
 # TARGETS (Hedefler / Recipe)
 # =========================================================
 def default_targets():
-    # Not: Bu hedefler "demo/başlangıç" değerleridir; tesise göre ayarlanır.
     return {
         "meta": {
             "source_mode": "Mühendis",   # "Mühendis" | "AI" | "Hibrit"
@@ -150,14 +149,12 @@ def default_targets():
             "notes": "Başlangıç hedefleri (demo).",
         },
         "targets": {
-            # Enerji / verim
             "kwh_per_t": {"low": 400.0, "high": 430.0, "unit": "kWh/t"},
             "tap_temp_c": {"low": 1600.0, "high": 1630.0, "unit": "°C"},
             "electrode_kg_per_t": {"low": 0.040, "high": 0.060, "unit": "kg/t"},
             "o2_flow_nm3h": {"low": 700.0, "high": 1200.0, "unit": "Nm³/h"},
             "panel_delta_t_c": {"low": 0.0, "high": 25.0, "unit": "°C"},
-
-            # Power quality / elektrik (şimdilik kolon yoksa sapma hesaplamaz)
+            # Power quality / elektrik (kolon yoksa sapma hesaplamaz)
             "cos_phi_furnace": {"low": 0.80, "high": 0.92, "unit": "-"},
             "cos_phi_ladle": {"low": 0.90, "high": 0.97, "unit": "-"},
         },
@@ -264,7 +261,6 @@ def _make_heat_row(ts: datetime, idx: int):
         "operator_note": "Simülasyon kaydı",
         "grade": random.choice(["A", "B", "C"]),
         "ems_on": random.choice([0, 1]),
-        # cos_phi_furnace / cos_phi_ladle yok (demo). İstersek ileride eklenir.
     }
 
 
@@ -301,11 +297,6 @@ def advance_sim_stream(batch: int):
     st.session_state.sim_data = st.session_state.sim_full_data[:nxt]
     st.session_state.sim_stream_progress = nxt
     return True
-
-
-def html_autorefresh(seconds: int):
-    sec = max(1, int(seconds))
-    components.html(f"<meta http-equiv='refresh' content='{sec}'>", height=0)
 
 
 # =========================================================
@@ -964,7 +955,7 @@ def show_runtime_page(sim_mode: bool):
 
 
 # =========================================================
-# 2.5) HEDEFLER (Targets / Recipe) — Canlı Veri'nin altına
+# 2.5) HEDEFLER (Targets / Recipe)
 # =========================================================
 def show_targets_page(sim_mode: bool):
     ensure_targets_loaded()
@@ -972,7 +963,6 @@ def show_targets_page(sim_mode: bool):
     st.markdown("## Hedefler – Recipe / Set Noktaları")
     st.caption("Bu sayfa hedefleri tanımlar. Aşağıda aynı sayfada **hedefe sapma** (aktüel vs hedef) görünür.")
 
-    # Aktif veriden sapma hesaplamak için df
     df = to_df(get_active_data(sim_mode))
     has_df = not df.empty
 
@@ -1003,14 +993,12 @@ def show_targets_page(sim_mode: bool):
     st.markdown("---")
     st.markdown("### 🧩 Hedef Pencereleri (Low–High)")
 
-    # UI helpers
     def _get_num(path_key: str, field: str, default: float) -> float:
         try:
             return float(targets.get(path_key, {}).get(field, default))
         except Exception:
             return float(default)
 
-    # Gruplar
     g1, g2 = st.columns(2)
     with g1:
         st.markdown("#### Enerji / Verim")
@@ -1037,7 +1025,6 @@ def show_targets_page(sim_mode: bool):
         cpl_low = st.number_input("cosφ Ladle Low", 0.0, 1.0, _get_num("cos_phi_ladle", "low", 0.90), step=0.01, format="%.2f", key="t_cpl_low")
         cpl_high = st.number_input("cosφ Ladle High", 0.0, 1.0, _get_num("cos_phi_ladle", "high", 0.97), step=0.01, format="%.2f", key="t_cpl_high")
 
-    # Save targets
     if st.button("💾 Hedefleri Kaydet", key="btn_save_targets"):
         t_new = {
             "meta": {
@@ -1083,9 +1070,7 @@ def show_targets_page(sim_mode: bool):
         except Exception:
             return np.nan
 
-    # Sapma tablosu
     rows = []
-    # mapping: target_key -> df_col
     mapping = [
         ("kwh_per_t", "kwh_per_t", "kWh/t"),
         ("tap_temp_c", "tap_temp_c", "Tap T (°C)"),
@@ -1114,11 +1099,8 @@ def show_targets_page(sim_mode: bool):
         hi = float(t_used[tk].get("high", np.nan))
         act_last = _last(col)
         act_avg10 = _mean(col)
-
-        # Eğer kolon yoksa skip ama yine de göster
         has_col = col in df.columns
 
-        # Sapma büyüklüğü: pencereye göre
         def deviation_to_band(v):
             if not np.isfinite(v):
                 return np.nan
@@ -1147,8 +1129,6 @@ def show_targets_page(sim_mode: bool):
         st.info("Gösterilecek hedef/sapma metriği yok.")
 
     st.markdown("#### ⚡ Hızlı Özet")
-    # Özet metrikler (mevcut kolonlardan)
-    # Basit skor: hedef dışı parametre sayısı (son değer)
     out_cnt = 0
     ok_cnt = 0
     for r in rows:
@@ -1163,7 +1143,7 @@ def show_targets_page(sim_mode: bool):
     c3.metric("Aktif hedef kaynağı", st.session_state.targets.get("meta", {}).get("source_mode", "-"))
 
     if out_cnt > 0:
-        st.warning("Bazı parametreler hedef penceresi dışında. Verim sayfasında bu sapmaları 'neden + öneri'ye çeviriyoruz.")
+        st.warning("Bazı parametreler hedef penceresi dışında.")
     else:
         st.success("Tüm izlenen parametreler hedef penceresinde (mevcut veri/kolonlara göre).")
 
@@ -1572,95 +1552,6 @@ def show_hse_vision_demo_page(sim_mode: bool):
 
 
 # =========================================================
-# LAB – Simülasyon / Adhoc
-# =========================================================
-def show_lab_simulation(sim_mode: bool):
-    st.markdown("## Lab – Simülasyon / Adhoc Analiz (İleri Seviye)")
-    st.caption("Bu sayfa demo/Ar-Ge amaçlıdır. Yönetim ekranı değildir.")
-
-    if not sim_mode:
-        st.warning("Lab sayfası simülasyon modu için tasarlandı. Sidebar’dan Simülasyon Modu’nu aç.")
-        return
-
-    ensure_simulation_data_initialized()
-
-    st.markdown("### 🔄 Veri Akışı Kontrolü")
-
-    batch = st.slider("Akış hızı (şarj/adım)", 1, 500, SIM_STREAM_BATCH_DEFAULT, 1, key="lab_batch")
-
-    c1, c2, c3 = st.columns([1.2, 1.2, 1.2])
-    with c1:
-        bind_toggle("9000 şarjı zamanla oku", "sim_stream_enabled", "lab_sim_stream_enabled")
-    with c2:
-        bind_toggle("Otomatik ilerlet", "sim_stream_autostep", "lab_sim_stream_autostep")
-    with c3:
-        bind_toggle("Auto-refresh", "sim_stream_autorefresh", "lab_sim_stream_autorefresh")
-
-    if st.session_state.sim_stream_autorefresh:
-        bind_number_int("Auto-refresh (sn)", "sim_stream_refresh_sec", "lab_sim_stream_refresh_sec", 1, 60, 1)
-        html_autorefresh(int(st.session_state.sim_stream_refresh_sec))
-
-    b1, b2, b3 = st.columns([1.2, 1.2, 2.0])
-    with b1:
-        if st.button("▶️ İlerlet (1 adım)", key="lab_advance"):
-            advance_sim_stream(batch)
-            st.rerun()
-    with b2:
-        if st.button("⟲ Reset (1000’e dön)", key="lab_reset"):
-            reset_sim_to_1000()
-            st.rerun()
-    with b3:
-        st.caption(f"Akış ilerleme: {int(st.session_state.sim_stream_progress)} / {SIM_STREAM_TOTAL}")
-
-    if st.session_state.sim_stream_enabled and st.session_state.sim_stream_autostep:
-        cur = int(st.session_state.sim_stream_progress)
-        if st.session_state.sim_stream_last_step_progress != cur:
-            st.session_state.sim_stream_last_step_progress = cur
-            advance_sim_stream(batch)
-
-    df = to_df(st.session_state.sim_data)
-    if df.empty:
-        st.info("Veri yok.")
-        return
-
-    st.markdown("### İstatistik (etiketsiz — dağılım)")
-    summ = distro_summary(df)
-    if not summ.empty:
-        st.table(summ)
-
-    st.markdown("### Trend (Lab)")
-    tmp = df.tail(24 * 7)
-    use_cols = [c for c in ["kwh_per_t", "tap_temp_c", "electrode_kg_per_heat", "panel_delta_t_c", "o2_flow_nm3h", "slag_foaming_index"] if c in tmp.columns]
-    if use_cols:
-        long = tmp[["timestamp_dt"] + use_cols].melt("timestamp_dt", var_name="var", value_name="val").dropna()
-        var_map = {
-            "kwh_per_t": "kWh/t",
-            "tap_temp_c": "Tap T (°C)",
-            "electrode_kg_per_heat": "Elektrot (kg/şarj)",
-            "panel_delta_t_c": "Panel ΔT (°C)",
-            "o2_flow_nm3h": "O2 (Nm³/h)",
-            "slag_foaming_index": "Slag Foaming",
-        }
-        long["var_name"] = long["var"].map(var_map).fillna(long["var"])
-        ch = (
-            alt.Chart(long)
-            .mark_line()
-            .encode(
-                x=alt.X("timestamp_dt:T", title="Zaman", axis=alt.Axis(format="%d.%m %H:%M", labelAngle=-35)),
-                y=alt.Y("val:Q", title=None),
-                color=alt.Color("var_name:N", title=None, legend=alt.Legend(orient="top", direction="horizontal")),
-            )
-            .properties(height=440)
-        )
-        st.altair_chart(ch.interactive(), use_container_width=True)
-    else:
-        st.info("Trend için uygun kolon yok.")
-
-    with st.expander("Ham tablo (lab)"):
-        st.dataframe(df.tail(200), use_container_width=True)
-
-
-# =========================================================
 # SIDEBAR: NAV + HIZLI SİM AKIŞ
 # =========================================================
 def sidebar_controls():
@@ -1680,7 +1571,7 @@ def sidebar_controls():
 
     st.divider()
 
-    pages = ["Setup", "Canlı Veri", "Hedefler", "ArcOptimizer", "Lab (Advanced)", "HSE Vision (Demo)"]
+    pages = ["Setup", "Canlı Veri", "Hedefler", "ArcOptimizer", "HSE Vision (Demo)"]
     st.selectbox(
         "Sayfa",
         pages,
@@ -1690,9 +1581,7 @@ def sidebar_controls():
 
     st.divider()
 
-    is_lab = (st.session_state.classic_page == "Lab (Advanced)")
-
-    if sim_mode and (not is_lab):
+    if sim_mode:
         st.markdown("### 🔄 Hızlı Akış")
 
         batch = st.slider("Batch (şarj/adım)", 1, 500, SIM_STREAM_BATCH_DEFAULT, 1, key="sidebar_batch")
@@ -1737,10 +1626,8 @@ def main():
         show_targets_page(sim_mode)
     elif page == "ArcOptimizer":
         show_arc_optimizer_page(sim_mode)
-    elif page == "HSE Vision (Demo)":
-        show_hse_vision_demo_page(sim_mode)
     else:
-        show_lab_simulation(sim_mode)
+        show_hse_vision_demo_page(sim_mode)
 
 
 if __name__ == "__main__":
