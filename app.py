@@ -1549,6 +1549,61 @@ def show_hse_vision_demo_page(sim_mode: bool):
             st.warning("🔊 ALARM AKTİF – KRİTİK İSG RİSKİ")
     else:
         st.success("✅ Aktif bir güvenlik riski tespit edilmedi.")
+# Helmet Detection – YOLOv5 ile baret tespiti
+import cv2
+import torch
+import pandas as pd
+from datetime import timedelta
+import streamlit as st
+
+@st.cache_resource(show_spinner=False)
+def load_helmet_model():
+    model = torch.hub.load('ultralytics/yolov5', 'yolov5s', pretrained=True)
+    model.conf = 0.4  # Tespit eşiği
+    return model
+
+def analyze_helmet_video(video_path):
+    cap = cv2.VideoCapture(video_path)
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    model = load_helmet_model()
+
+    no_helmet_frames = []
+    frame_number = 0
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        # Her 15 karede bir analiz (hız için)
+        if frame_number % 15 == 0:
+            results = model(frame)
+            df = results.pandas().xyxy[0]
+
+            person_count = len(df[df['name'] == 'person'])
+            helmet_count = len(df[df['name'] == 'helmet']) if 'helmet' in df['name'].values else 0
+
+            if person_count > 0 and helmet_count == 0:
+                timestamp = str(timedelta(seconds=int(frame_number / fps)))
+                no_helmet_frames.append({"Zaman": timestamp, "Durum": "Baretsiz"})
+
+        frame_number += 1
+
+    cap.release()
+    return pd.DataFrame(no_helmet_frames)
+if has_video:
+    st.markdown("### 🧠 Baretsiz Anlar (AI Tespiti)")
+    with st.spinner("Video analiz ediliyor..."):
+        video_path = "uploaded_temp_video.mp4"
+        with open(video_path, "wb") as f:
+            f.write(st.session_state.hse_video_bytes)
+
+        df_result = analyze_helmet_video(video_path)
+        if df_result.empty:
+            st.success("Tüm kişiler baretli görünüyor – baretsiz an tespit edilmedi.")
+        else:
+            st.warning(f"Toplam **{len(df_result)}** baretsiz kare bulundu:")
+            st.dataframe(df_result)
 
 
 # =========================================================
