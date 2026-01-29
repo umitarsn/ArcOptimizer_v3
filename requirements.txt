@@ -7,4 +7,4 @@ plotly
 Pillow
 openpyxl
 altair
-opencv-python-headless
+opencv-python-headless==4.8.0.76
