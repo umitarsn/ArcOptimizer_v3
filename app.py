@@ -1591,6 +1591,8 @@ def analyze_helmet_video(video_path):
 
     cap.release()
     return pd.DataFrame(no_helmet_frames)
+    video_path = "static/helmet.mp4"
+
 if has_video:
     st.markdown("### 🧠 Baretsiz Anlar (AI Tespiti)")
     with st.spinner("Video analiz ediliyor..."):
