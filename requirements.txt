@@ -7,4 +7,5 @@ plotly
 Pillow
 openpyxl
 altair
+pip install ultralytics opencv-python-headless
 
