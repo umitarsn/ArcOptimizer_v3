@@ -45,8 +45,14 @@ RUNTIME_SAVE_PATH = "data/runtime_data.json"
 MODEL_SAVE_PATH = "models/arc_optimizer_model.pkl"
 TARGETS_SAVE_PATH = "data/targets.json"
 
+# ✅ GitHub repo içinde otomatik gösterilecek demo video yolu
+# Bu dosyayı projene ekle: assets/hse_demo.mp4 (veya aşağıdaki path'i değiştir)
+HSE_DEMO_VIDEO_PATH = "assets/hse_demo.mp4"
+HSE_DEMO_VIDEO_MIME = "video/mp4"
+
 os.makedirs("data", exist_ok=True)
 os.makedirs("models", exist_ok=True)
+os.makedirs("assets", exist_ok=True)
 
 # Dijital ikiz hedefleri
 DIGITAL_TWIN_HISTORICAL_HEATS = 1000
@@ -65,9 +71,6 @@ def _init_state():
     defaults = {
         "info_state": {},
         "profit_info_state": {},
-        "hse_video_bytes": None,
-        "hse_video_mime": None,
-        "hse_video_name": None,
         "sim_data": None,
         "sim_full_data": None,
         # sim akış state
@@ -88,6 +91,9 @@ def _init_state():
         # targets
         "targets_loaded": False,
         "targets": None,
+
+        # HSE demo state
+        "hse_bbox_demo_enabled": True,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -95,46 +101,6 @@ def _init_state():
 
 
 _init_state()
-
-
-# =========================================================
-# WIDGET BIND HELPERS
-# =========================================================
-def bind_toggle(label: str, state_key: str, widget_key: str, help_text: Optional[str] = None):
-    def _sync():
-        st.session_state[state_key] = st.session_state[widget_key]
-
-    return st.toggle(
-        label,
-        value=bool(st.session_state.get(state_key, False)),
-        key=widget_key,
-        help=help_text,
-        on_change=_sync,
-    )
-
-
-def bind_number_int(
-    label: str,
-    state_key: str,
-    widget_key: str,
-    min_v: int,
-    max_v: int,
-    step: int = 1,
-    help_text: Optional[str] = None,
-):
-    def _sync():
-        st.session_state[state_key] = int(st.session_state[widget_key])
-
-    return st.number_input(
-        label,
-        min_value=min_v,
-        max_value=max_v,
-        value=int(st.session_state.get(state_key, min_v)),
-        step=step,
-        key=widget_key,
-        help=help_text,
-        on_change=_sync,
-    )
 
 
 # =========================================================
@@ -480,31 +446,6 @@ def money_pack(df: pd.DataFrame, energy_price=0.12, electrode_price=3.0, annual_
 
     eur_per_year = eur_per_t * float(annual_ton)
     return {"eur_per_t": eur_per_t, "eur_per_year": eur_per_year}
-
-
-def distro_summary(df: pd.DataFrame):
-    out = []
-
-    def add_metric(name, s: pd.Series, fmt="{:.2f}"):
-        s = s.dropna()
-        if len(s) < 5:
-            return
-        out.append({
-            "Gösterge": name,
-            "p10": fmt.format(s.quantile(0.10)),
-            "p50": fmt.format(s.quantile(0.50)),
-            "p90": fmt.format(s.quantile(0.90)),
-            "Son 3 Ort.": fmt.format(s.tail(3).mean()) if len(s) >= 3 else "-",
-        })
-
-    if "kwh_per_t" in df.columns:
-        add_metric("kWh/t", df["kwh_per_t"], fmt="{:.1f}")
-    if "electrode_kg_per_t" in df.columns:
-        add_metric("Elektrot (kg/t)", df["electrode_kg_per_t"], fmt="{:.3f}")
-    if "tap_temp_c" in df.columns:
-        add_metric("Tap T (°C)", df["tap_temp_c"], fmt="{:.0f}")
-
-    return pd.DataFrame(out)
 
 
 # =========================================================
@@ -1324,29 +1265,45 @@ def show_arc_optimizer_page(sim_mode: bool):
 
 
 # =========================================================
-# HSE Vision (Demo)
+# HSE Vision (Demo) – video repo içinden otomatik oynar, siren yok
 # =========================================================
+def _read_local_video_as_base64(path: str) -> tuple[Optional[str], Optional[str]]:
+    """
+    Returns (base64_str, mime) if file exists, else (None, None)
+    """
+    if not path or not os.path.exists(path):
+        return None, None
+    try:
+        with open(path, "rb") as f:
+            b = f.read()
+        return base64.b64encode(b).decode("utf-8"), HSE_DEMO_VIDEO_MIME
+    except Exception:
+        return None, None
+
+
 def show_hse_vision_demo_page(sim_mode: bool):
     st.markdown("## 🦺 HSE Vision (Demo) – Kamera & Risk Değerlendirme")
-    st.caption("Pilot demo – görüntü işleme simülasyonu + risk skoru + kısa vadeli AI tahmin (PoC)")
+    st.caption("Pilot demo – görüntü + risk skoru + kısa vadeli trend (PoC). (Not: siren uygulama içinden kaldırıldı; video kendi sesiyle oynar.)")
 
-    st.markdown("### 🎥 Kamera / Görüntü")
-    up = st.file_uploader("Video yükle (mp4 / mov)", type=["mp4", "mov", "m4v"])
+    # ---- sadece bbox ayarı (siren kaldırıldı)
+    st.markdown("### ⚙️ Demo Ayarları")
+    st.session_state.hse_bbox_demo_enabled = st.toggle(
+        "Bounding Box overlay",
+        value=bool(st.session_state.get("hse_bbox_demo_enabled", True)),
+        help="Video üzerinde hareketli kutu (demo amaçlı).",
+        key="hse_bbox_demo_enabled_widget",
+    )
 
-    if up is not None:
-        st.session_state.hse_video_bytes = up.getvalue()
-        st.session_state.hse_video_mime = up.type or "video/mp4"
-        st.session_state.hse_video_name = up.name
+    st.markdown("---")
+    st.markdown("### 🎥 Kamera / Görüntü (Repo’dan otomatik)")
 
-    has_video = bool(st.session_state.get("hse_video_bytes"))
-    b64 = None
-    mime = None
-    if has_video:
-        b64 = base64.b64encode(st.session_state.hse_video_bytes).decode("utf-8")
-        mime = st.session_state.get("hse_video_mime") or "video/mp4"
-
-    if not has_video:
-        st.info("Video yüklenmedi. Demo modunda analiz yine çalışır; video alanı temsili gösterilir.")
+    b64, mime = _read_local_video_as_base64(HSE_DEMO_VIDEO_PATH)
+    if b64 is None:
+        st.warning(
+            f"Demo video bulunamadı: **{HSE_DEMO_VIDEO_PATH}**\n\n"
+            "GitHub projesine videoyu bu path ile ekle. Örn:\n"
+            "- assets/hse_demo.mp4"
+        )
 
     RISK_TYPES = [
         "SLAG / SPLASH",
@@ -1399,9 +1356,11 @@ def show_hse_vision_demo_page(sim_mode: bool):
     else:
         tmin, tmax = (120, 200)
 
+    critical_threshold = 75
+    kritik = score >= critical_threshold
+
     if score >= 75:
         durum = "🔴 KRİTİK"
-        alarm = True
         sorun_metni = (
             f"{risk_tipi} riski yüksek.\n"
             f"Genel HSE skor: {score}/100.\n"
@@ -1410,7 +1369,6 @@ def show_hse_vision_demo_page(sim_mode: bool):
         )
     elif score >= 50:
         durum = "🟡 DİKKAT"
-        alarm = False
         sorun_metni = (
             f"Olası risk: {risk_tipi}.\n"
             f"Genel HSE skor: {score}/100.\n"
@@ -1418,9 +1376,9 @@ def show_hse_vision_demo_page(sim_mode: bool):
         )
     else:
         durum = "🟢 NORMAL"
-        alarm = False
         sorun_metni = None
 
+    # ---- mini trend (aktüel + AI)
     horizon_min = 15
     now = datetime.now(TZ)
 
@@ -1447,7 +1405,6 @@ def show_hse_vision_demo_page(sim_mode: bool):
 
     risk_df = pd.DataFrame(actual_points + future_points)
 
-    critical_threshold = 75
     crit_time = None
     for row in future_points:
         if row["risk"] >= critical_threshold:
@@ -1456,41 +1413,122 @@ def show_hse_vision_demo_page(sim_mode: bool):
 
     left, right = st.columns([2.2, 1.3])
 
+    # bbox rengi: ihlal = kırmızı (baretsiz), ok = yeşil
+    violation_for_bbox = bool(baret_yok)
+    bbox_color = "#ff2d2d" if violation_for_bbox else "#3ddc84"
+
+    overlay_js = f"""
+    <style>
+      .hse-wrap {{
+        position: relative;
+        width: 100%;
+        height: 520px;
+        border-radius: 14px;
+        overflow: hidden;
+        background: #000;
+      }}
+      .hse-media {{
+        position:absolute;
+        inset:0;
+        width:100%;
+        height:100%;
+        object-fit: cover;
+      }}
+      .hse-bbox {{
+        position:absolute;
+        border: 4px solid {bbox_color};
+        border-radius: 10px;
+        box-shadow: 0 0 0 2px rgba(0,0,0,0.35);
+        width: 180px;
+        height: 280px;
+        left: 10%;
+        top: 18%;
+        transition: border-color 120ms linear;
+        pointer-events: none;
+      }}
+      .hse-tag {{
+        position:absolute;
+        left: 12px;
+        top: 12px;
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: rgba(0,0,0,0.55);
+        color: white;
+        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto;
+        font-size: 13px;
+        font-weight: 800;
+        letter-spacing: 0.2px;
+      }}
+      .hse-tag span {{
+        color: {bbox_color};
+      }}
+    </style>
+    <script>
+      (function(){{
+        const enabled = {str(bool(st.session_state.get("hse_bbox_demo_enabled", True))).lower()};
+        if (!enabled) return;
+
+        const box = document.getElementById("hse_bbox");
+        if (!box) return;
+
+        // hareket: sinüs ile sağ-sol + hafif yukarı-aşağı
+        let t = 0;
+        if (window.__hse_bbox_timer) clearInterval(window.__hse_bbox_timer);
+        window.__hse_bbox_timer = setInterval(() => {{
+          t += 0.06;
+          const x = 8 + 12 * (Math.sin(t) * 0.5 + 0.5);   // 8%..20%
+          const y = 14 + 10 * (Math.sin(t*0.7) * 0.5 + 0.5); // 14%..24%
+          const w = 170 + 20 * (Math.sin(t*0.9) * 0.5 + 0.5); // 170..190
+          const h = 270 + 25 * (Math.sin(t*0.6) * 0.5 + 0.5); // 270..295
+          box.style.left = x + "%";
+          box.style.top = y + "%";
+          box.style.width = w + "px";
+          box.style.height = h + "px";
+        }}, 60);
+      }})();
+    </script>
+    """
+
     with left:
-        if has_video:
+        if b64 is not None:
+            # ✅ Video otomatik repo içinden gelir, ses video'nun kendi sesi (muted değil)
+            # Not: autoplay bazı tarayıcılarda sesli başlamayı engelleyebilir; kullanıcı play'e basınca ses gelir.
             components.html(
                 f"""
-                <video autoplay muted loop controls playsinline
-                       style="width:100%; border-radius:14px; background:#000;">
-                  <source src="data:{mime};base64,{b64}" type="{mime}">
-                </video>
+                <div class="hse-wrap">
+                  <video class="hse-media" autoplay loop controls playsinline>
+                    <source src="data:{mime};base64,{b64}" type="{mime}">
+                  </video>
+
+                  <div class="hse-tag">PPE: <span>{'BARETSİZ' if baret_yok else 'OK'}</span></div>
+                  <div id="hse_bbox" class="hse-bbox" style="display:{'block' if st.session_state.get('hse_bbox_demo_enabled', True) else 'none'};"></div>
+                </div>
+                {overlay_js}
                 """,
                 height=520,
             )
         else:
             components.html(
-                """
-                <div style="
-                    width:100%;
-                    height:520px;
-                    border-radius:14px;
-                    background: linear-gradient(135deg, #111, #333);
-                    display:flex;
-                    align-items:center;
-                    justify-content:center;
-                    color:#fff;
-                    font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto;
-                    text-align:center;
-                    padding:24px;
-                ">
-                  <div>
-                    <div style="font-size:20px; font-weight:800; margin-bottom:8px;">📷 Video yok (Demo Placeholder)</div>
-                    <div style="opacity:0.85; font-size:14px; line-height:1.4;">
-                      Bu ekran normalde kamera görüntüsünü gösterir.<br/>
-                      Video yüklemeden de risk skoru, trend ve alarm mantığı çalışır.
+                f"""
+                <div class="hse-wrap" style="background: linear-gradient(135deg, #111, #333);">
+                  <div style="
+                      position:absolute; inset:0;
+                      display:flex; align-items:center; justify-content:center;
+                      color:#fff; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto;
+                      text-align:center; padding:24px;
+                  ">
+                    <div>
+                      <div style="font-size:20px; font-weight:800; margin-bottom:8px;">📷 Demo video yok</div>
+                      <div style="opacity:0.85; font-size:14px; line-height:1.4;">
+                        assets/hse_demo.mp4 dosyasını ekleyince burada otomatik oynar.
+                      </div>
                     </div>
                   </div>
+
+                  <div class="hse-tag">PPE: <span>{'BARETSİZ' if baret_yok else 'OK'}</span></div>
+                  <div id="hse_bbox" class="hse-bbox" style="display:{'block' if st.session_state.get('hse_bbox_demo_enabled', True) else 'none'};"></div>
                 </div>
+                {overlay_js}
                 """,
                 height=520,
             )
@@ -1537,16 +1575,6 @@ def show_hse_vision_demo_page(sim_mode: bool):
     st.markdown("---")
     if sorun_metni:
         st.error(f"⚠️ **TESPİT EDİLEN SORUN**\n\n{sorun_metni}")
-        if alarm:
-            components.html(
-                """
-                <audio autoplay>
-                  <source src="https://actions.google.com/sounds/v1/alarms/alarm_clock.ogg" type="audio/ogg">
-                </audio>
-                """,
-                height=0,
-            )
-            st.warning("🔊 ALARM AKTİF – KRİTİK İSG RİSKİ")
     else:
         st.success("✅ Aktif bir güvenlik riski tespit edilmedi.")
 
@@ -1586,8 +1614,8 @@ def sidebar_controls():
 
         batch = st.slider("Batch (şarj/adım)", 1, 500, SIM_STREAM_BATCH_DEFAULT, 1, key="sidebar_batch")
 
-        bind_toggle("9000 şarjı zamanla oku", "sim_stream_enabled", "sb_sim_stream_enabled")
-        bind_toggle("Otomatik ilerlet", "sim_stream_autostep", "sb_sim_stream_autostep")
+        st.toggle("9000 şarjı zamanla oku", value=bool(st.session_state.get("sim_stream_enabled", True)), key="sim_stream_enabled")
+        st.toggle("Otomatik ilerlet", value=bool(st.session_state.get("sim_stream_autostep", True)), key="sim_stream_autostep")
 
         c1, c2 = st.columns(2)
         with c1:
