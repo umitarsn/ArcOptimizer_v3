@@ -5,7 +5,7 @@ import random
 import base64
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
-from typing import Optional, List, Tuple
+from typing import Optional, List
 
 import numpy as np
 import pandas as pd
@@ -45,8 +45,30 @@ RUNTIME_SAVE_PATH = "data/runtime_data.json"
 MODEL_SAVE_PATH = "models/arc_optimizer_model.pkl"
 TARGETS_SAVE_PATH = "data/targets.json"
 
-os.makedirs("data", exist_ok=True)
-os.makedirs("models", exist_ok=True)
+
+def _safe_mkdir(path: str):
+    """
+    Bazı ortamlarda 'assets' vb. bir klasör yerine aynı isimde DOSYA olabiliyor.
+    Bu durumda os.makedirs FileExistsError fırlatabiliyor.
+    Çözüm: Eğer path bir dosya ise klasör oluşturmaya çalışma; alternatif klasör kullan.
+    """
+    if os.path.exists(path) and not os.path.isdir(path):
+        return False
+    os.makedirs(path, exist_ok=True)
+    return True
+
+
+_safe_mkdir("data")
+_safe_mkdir("models")
+
+# assets klasörü varsa kullan, yoksa alternatif isimle devam et
+ASSETS_DIR = "assets"
+if not _safe_mkdir(ASSETS_DIR):
+    ASSETS_DIR = "assets_dir"
+    _safe_mkdir(ASSETS_DIR)
+
+# Repo'dan otomatik gösterilecek demo video
+HSE_DEMO_VIDEO_PATH = os.path.join(ASSETS_DIR, "hse_demo.mp4")
 
 # Dijital ikiz hedefleri
 DIGITAL_TWIN_HISTORICAL_HEATS = 1000
@@ -65,9 +87,6 @@ def _init_state():
     defaults = {
         "info_state": {},
         "profit_info_state": {},
-        "hse_video_bytes": None,
-        "hse_video_mime": None,
-        "hse_video_name": None,
         "sim_data": None,
         "sim_full_data": None,
         # sim akış state
@@ -75,8 +94,6 @@ def _init_state():
         "sim_stream_autostep": True,
         "sim_stream_progress": DIGITAL_TWIN_HISTORICAL_HEATS,
         "sim_stream_last_step_progress": None,
-        "sim_stream_autorefresh": False,
-        "sim_stream_refresh_sec": 2,
         # model meta
         "model_status": "Henüz eğitilmedi.",
         "model_last_train_time": None,
@@ -113,37 +130,13 @@ def bind_toggle(label: str, state_key: str, widget_key: str, help_text: Optional
     )
 
 
-def bind_number_int(
-    label: str,
-    state_key: str,
-    widget_key: str,
-    min_v: int,
-    max_v: int,
-    step: int = 1,
-    help_text: Optional[str] = None,
-):
-    def _sync():
-        st.session_state[state_key] = int(st.session_state[widget_key])
-
-    return st.number_input(
-        label,
-        min_value=min_v,
-        max_value=max_v,
-        value=int(st.session_state.get(state_key, min_v)),
-        step=step,
-        key=widget_key,
-        help=help_text,
-        on_change=_sync,
-    )
-
-
 # =========================================================
 # TARGETS (Hedefler / Recipe)
 # =========================================================
 def default_targets():
     return {
         "meta": {
-            "source_mode": "Mühendis",   # "Mühendis" | "AI" | "Hibrit"
+            "source_mode": "Mühendis",  # "Mühendis" | "AI" | "Hibrit"
             "last_updated": datetime.now(TZ).isoformat(),
             "updated_by": "system",
             "notes": "Başlangıç hedefleri (demo).",
@@ -154,6 +147,7 @@ def default_targets():
             "electrode_kg_per_t": {"low": 0.040, "high": 0.060, "unit": "kg/t"},
             "o2_flow_nm3h": {"low": 700.0, "high": 1200.0, "unit": "Nm³/h"},
             "panel_delta_t_c": {"low": 0.0, "high": 25.0, "unit": "°C"},
+            # Power quality / elektrik (kolon yoksa sapma hesaplamaz)
             "cos_phi_furnace": {"low": 0.80, "high": 0.92, "unit": "-"},
             "cos_phi_ladle": {"low": 0.90, "high": 0.97, "unit": "-"},
         },
@@ -235,15 +229,15 @@ runtime_data = load_runtime_data()
 def _make_heat_row(ts: datetime, idx: int):
     heat_id = f"SIM-{idx+1}"
 
-    tap_weight = 35 + random.uniform(-3, 3)          # ton
-    kwh_per_t = 420 + random.uniform(-25, 25)        # kWh/t
-    energy_kwh = tap_weight * kwh_per_t              # kWh
-    duration_min = 55 + random.uniform(-10, 10)      # dk
-    tap_temp = 1610 + random.uniform(-15, 15)        # °C
-    o2_flow = 950 + random.uniform(-150, 150)        # Nm³/h
-    slag_foaming = random.randint(3, 9)              # 0–10
-    panel_delta_t = 18 + random.uniform(-5, 8)       # °C
-    electrode_cons = 1.9 + random.uniform(-0.3, 0.3) # kg/heat
+    tap_weight = 35 + random.uniform(-3, 3)  # ton
+    kwh_per_t = 420 + random.uniform(-25, 25)  # kWh/t
+    energy_kwh = tap_weight * kwh_per_t  # kWh
+    duration_min = 55 + random.uniform(-10, 10)  # dk
+    tap_temp = 1610 + random.uniform(-15, 15)  # °C
+    o2_flow = 950 + random.uniform(-150, 150)  # Nm³/h
+    slag_foaming = random.randint(3, 9)  # 0–10
+    panel_delta_t = 18 + random.uniform(-5, 8)  # °C
+    electrode_cons = 1.9 + random.uniform(-0.3, 0.3)  # kg/heat
 
     return {
         "timestamp": ts.isoformat(),
@@ -303,9 +297,15 @@ def advance_sim_stream(batch: int):
 # =========================================================
 def get_arc_training_data(df: pd.DataFrame):
     required_cols = [
-        "tap_weight_t", "duration_min", "energy_kwh", "o2_flow_nm3h",
-        "slag_foaming_index", "panel_delta_t_c", "electrode_kg_per_heat",
-        "kwh_per_t", "tap_temp_c",
+        "tap_weight_t",
+        "duration_min",
+        "energy_kwh",
+        "o2_flow_nm3h",
+        "slag_foaming_index",
+        "panel_delta_t_c",
+        "electrode_kg_per_heat",
+        "kwh_per_t",
+        "tap_temp_c",
     ]
     for col in required_cols:
         if col not in df.columns:
@@ -317,8 +317,13 @@ def get_arc_training_data(df: pd.DataFrame):
         return None, None, None, None
 
     feature_cols = [
-        "tap_weight_t", "duration_min", "energy_kwh", "o2_flow_nm3h",
-        "slag_foaming_index", "panel_delta_t_c", "electrode_kg_per_heat",
+        "tap_weight_t",
+        "duration_min",
+        "energy_kwh",
+        "o2_flow_nm3h",
+        "slag_foaming_index",
+        "panel_delta_t_c",
+        "electrode_kg_per_heat",
     ]
     target_cols = ["kwh_per_t", "tap_temp_c"]
 
@@ -482,7 +487,7 @@ def money_pack(df: pd.DataFrame, energy_price=0.12, electrode_price=3.0, annual_
 
 
 # =========================================================
-# 24H + AI TAHMİN GRAFİĞİ
+# 24H + AI TAHMİN GRAFİĞİ (KeyError fix + daha sağlam)
 # =========================================================
 def build_24h_actual_vs_ai_chart(
     df: pd.DataFrame,
@@ -531,13 +536,16 @@ def build_24h_actual_vs_ai_chart(
     last_row = df_24.iloc[-1]
     tail50 = df.tail(50).copy()
 
-    def safe_mean(series: pd.Series, default: float) -> float:
-        series = series.dropna()
-        return float(series.mean()) if len(series) else float(default)
+    def safe_mean_from_df(d: pd.DataFrame, col: str, default: float) -> float:
+        if col not in d.columns:
+            return float(default)
+        s = d[col].dropna()
+        return float(s.mean()) if len(s) else float(default)
 
-    base_kwh = safe_mean(tail50["kwh_per_t"], safe_mean(df_24["kwh_per_t"], 420.0)) if "kwh_per_t" in df.columns else 420.0
-    base_elec = safe_mean(tail50["electrode_kg_per_t"], safe_mean(df_24["electrode_kg_per_t"], 0.055)) if "electrode_kg_per_t" in df.columns else 0.055
-    base_tap = safe_mean(tail50["tap_temp_c"], safe_mean(df_24["tap_temp_c_attachment"], 1610.0)) if "tap_temp_c" in df.columns else 1610.0
+    # ✅ KeyError'ı bitiren kısım: col yoksa asla df[col] ile erişme.
+    base_kwh = safe_mean_from_df(tail50, "kwh_per_t", safe_mean_from_df(df_24, "kwh_per_t", 420.0))
+    base_elec = safe_mean_from_df(tail50, "electrode_kg_per_t", safe_mean_from_df(df_24, "electrode_kg_per_t", 0.055))
+    base_tap = safe_mean_from_df(tail50, "tap_temp_c", safe_mean_from_df(df_24, "tap_temp_c", 1610.0))
 
     target_kwh = max(base_kwh - 5.0, 0.0)
     target_elec = max(base_elec - 0.002, 0.0)
@@ -547,7 +555,7 @@ def build_24h_actual_vs_ai_chart(
         feat_defaults = {}
         for c in feat_cols:
             if c in tail50.columns:
-                feat_defaults[c] = safe_mean(tail50[c], safe_mean(df[c], 0.0))
+                feat_defaults[c] = safe_mean_from_df(tail50, c, safe_mean_from_df(df, c, 0.0))
             else:
                 feat_defaults[c] = 0.0
 
@@ -665,9 +673,7 @@ def build_24h_actual_vs_ai_chart(
     st.altair_chart(full, use_container_width=True)
 
     delta_min = (future_end - last_time).total_seconds() / 60.0
-    st.caption(
-        f"now çizgisi: son ölçüm. Tahmini döküm anı ~ **{delta_min:.0f} dk** sonrası (kırmızı kesikli çizgi)."
-    )
+    st.caption(f"now çizgisi: son ölçüm. Tahmini döküm anı ~ **{delta_min:.0f} dk** sonrası (kırmızı kesikli çizgi).")
 
 
 def actual_vs_potential_last50_table(df: pd.DataFrame, model, feat_cols, target_cols):
@@ -881,508 +887,4 @@ def show_runtime_page(sim_mode: bool):
         with c9:
             electrode_cons = st.number_input("Elektrot Tüketimi (kg/şarj)", min_value=0.0, step=0.01)
 
-        note = st.text_input("Operatör Notu (opsiyonel)", "")
-        submitted = st.form_submit_button("Kaydet")
-
-    if submitted:
-        if not heat_id:
-            st.error("Heat ID / Şarj No zorunlu.")
-        else:
-            if sim_mode:
-                st.warning("Simülasyon modunda kayıt dosyaya yazılmaz (demo amaçlı).")
-            else:
-                now = datetime.now(TZ).isoformat()
-                kwh_per_t = energy_kwh / tap_weight if tap_weight > 0 else None
-                new_entry = {
-                    "timestamp": now,
-                    "heat_id": heat_id,
-                    "tap_weight_t": tap_weight,
-                    "duration_min": duration_min,
-                    "energy_kwh": energy_kwh,
-                    "tap_temp_c": tap_temp,
-                    "o2_flow_nm3h": o2_flow,
-                    "slag_foaming_index": slag_foaming,
-                    "panel_delta_t_c": panel_delta_t,
-                    "electrode_kg_per_heat": electrode_cons,
-                    "kwh_per_t": kwh_per_t,
-                    "operator_note": note,
-                    "grade": "UNK",
-                    "ems_on": 1,
-                }
-                runtime_data.append(new_entry)
-                save_runtime_data(runtime_data)
-                st.success(f"Şarj kaydı eklendi: {heat_id}")
-
-    df = to_df(get_active_data(sim_mode))
-    if df.empty:
-        st.info("Henüz veri yok.")
-        return
-
-    st.markdown("### Kayıtlı Veriler")
-    cols = [
-        "timestamp_dt", "heat_id", "tap_weight_t", "duration_min", "energy_kwh",
-        "kwh_per_t", "tap_temp_c", "electrode_kg_per_heat", "electrode_kg_per_t",
-        "slag_foaming_index", "panel_delta_t_c", "o2_flow_nm3h", "grade", "ems_on",
-    ]
-    show_cols = [c for c in cols if c in df.columns]
-    st.dataframe(df[show_cols], use_container_width=True)
-
-
-# =========================================================
-# 2.5) HEDEFLER
-# =========================================================
-def show_targets_page(sim_mode: bool):
-    ensure_targets_loaded()
-
-    st.markdown("## Hedefler – Recipe / Set Noktaları")
-    st.caption("Bu sayfa hedefleri tanımlar. Aşağıda aynı sayfada **hedefe sapma** (aktüel vs hedef) görünür.")
-
-    df = to_df(get_active_data(sim_mode))
-    has_df = not df.empty
-
-    t = st.session_state.targets
-    meta = t.get("meta", {})
-    targets = t.get("targets", {})
-
-    top1, top2 = st.columns([2.2, 1.8])
-    with top1:
-        st.markdown("### 🎛️ Hedef Kaynağı / Yönetim")
-        source_mode = st.selectbox(
-            "Hedef Kaynağı",
-            ["Mühendis", "AI", "Hibrit"],
-            index=["Mühendis", "AI", "Hibrit"].index(meta.get("source_mode", "Mühendis"))
-            if meta.get("source_mode", "Mühendis") in ["Mühendis", "AI", "Hibrit"]
-            else 0,
-            key="targets_source_mode",
-        )
-        updated_by = st.text_input("Updated by (opsiyonel)", meta.get("updated_by", ""))
-        notes = st.text_area("Notlar", meta.get("notes", ""), height=90)
-    with top2:
-        st.markdown("### 🕒 Versiyon / Zaman")
-        last_up = meta.get("last_updated", "-")
-        st.metric("Son güncelleme", last_up.split("T")[0] if isinstance(last_up, str) and "T" in last_up else str(last_up))
-
-    st.markdown("---")
-    st.markdown("### 🧩 Hedef Pencereleri (Low–High)")
-
-    def _get_num(path_key: str, field: str, default: float) -> float:
-        try:
-            return float(targets.get(path_key, {}).get(field, default))
-        except Exception:
-            return float(default)
-
-    g1, g2 = st.columns(2)
-    with g1:
-        st.markdown("#### Enerji / Verim")
-        kwh_low = st.number_input("kWh/t Low", 0.0, 2000.0, _get_num("kwh_per_t", "low", 400.0), step=1.0, key="t_kwh_low")
-        kwh_high = st.number_input("kWh/t High", 0.0, 2000.0, _get_num("kwh_per_t", "high", 430.0), step=1.0, key="t_kwh_high")
-
-        tap_low = st.number_input("Tap T Low (°C)", 0.0, 2000.0, _get_num("tap_temp_c", "low", 1600.0), step=1.0, key="t_tap_low")
-        tap_high = st.number_input("Tap T High (°C)", 0.0, 2000.0, _get_num("tap_temp_c", "high", 1630.0), step=1.0, key="t_tap_high")
-
-        elecpt_low = st.number_input("Elektrot (kg/t) Low", 0.0, 1.0, _get_num("electrode_kg_per_t", "low", 0.040), step=0.001, format="%.3f", key="t_ept_low")
-        elecpt_high = st.number_input("Elektrot (kg/t) High", 0.0, 1.0, _get_num("electrode_kg_per_t", "high", 0.060), step=0.001, format="%.3f", key="t_ept_high")
-
-    with g2:
-        st.markdown("#### Proses / Güvenlik + Elektrik (PQ)")
-        o2_low = st.number_input("O2 Low (Nm³/h)", 0.0, 10000.0, _get_num("o2_flow_nm3h", "low", 700.0), step=10.0, key="t_o2_low")
-        o2_high = st.number_input("O2 High (Nm³/h)", 0.0, 10000.0, _get_num("o2_flow_nm3h", "high", 1200.0), step=10.0, key="t_o2_high")
-
-        pdt_low = st.number_input("Panel ΔT Low (°C)", 0.0, 200.0, _get_num("panel_delta_t_c", "low", 0.0), step=0.5, key="t_pdt_low")
-        pdt_high = st.number_input("Panel ΔT High (°C)", 0.0, 200.0, _get_num("panel_delta_t_c", "high", 25.0), step=0.5, key="t_pdt_high")
-
-        st.markdown("**cosφ hedefleri (veri gelince sapma hesaplanır):**")
-        cpf_low = st.number_input("cosφ Furnace Low", 0.0, 1.0, _get_num("cos_phi_furnace", "low", 0.80), step=0.01, format="%.2f", key="t_cpf_low")
-        cpf_high = st.number_input("cosφ Furnace High", 0.0, 1.0, _get_num("cos_phi_furnace", "high", 0.92), step=0.01, format="%.2f", key="t_cpf_high")
-        cpl_low = st.number_input("cosφ Ladle Low", 0.0, 1.0, _get_num("cos_phi_ladle", "low", 0.90), step=0.01, format="%.2f", key="t_cpl_low")
-        cpl_high = st.number_input("cosφ Ladle High", 0.0, 1.0, _get_num("cos_phi_ladle", "high", 0.97), step=0.01, format="%.2f", key="t_cpl_high")
-
-    if st.button("💾 Hedefleri Kaydet", key="btn_save_targets"):
-        t_new = {
-            "meta": {
-                "source_mode": source_mode,
-                "last_updated": datetime.now(TZ).isoformat(),
-                "updated_by": updated_by.strip(),
-                "notes": notes.strip(),
-            },
-            "targets": {
-                "kwh_per_t": {"low": float(kwh_low), "high": float(kwh_high), "unit": "kWh/t"},
-                "tap_temp_c": {"low": float(tap_low), "high": float(tap_high), "unit": "°C"},
-                "electrode_kg_per_t": {"low": float(elecpt_low), "high": float(elecpt_high), "unit": "kg/t"},
-                "o2_flow_nm3h": {"low": float(o2_low), "high": float(o2_high), "unit": "Nm³/h"},
-                "panel_delta_t_c": {"low": float(pdt_low), "high": float(pdt_high), "unit": "°C"},
-                "cos_phi_furnace": {"low": float(cpf_low), "high": float(cpf_high), "unit": "-"},
-                "cos_phi_ladle": {"low": float(cpl_low), "high": float(cpl_high), "unit": "-"},
-            },
-        }
-        if save_targets(t_new):
-            st.session_state.targets = t_new
-            st.success("Hedefler kaydedildi.")
-
-    st.markdown("---")
-    st.markdown("### 📏 Hedefe Sapma (Aynı sayfada)")
-    if not has_df:
-        st.info("Sapma hesaplamak için veri yok (simülasyon veya canlı kayıt girin).")
-        return
-    st.info("Sapma tablosu bu demo için kısaltıldı (istersen tekrar genişletirim).")
-
-
-# =========================================================
-# 3) ARC OPTIMIZER
-# =========================================================
-def show_arc_optimizer_page(sim_mode: bool):
-    st.markdown("## Arc Optimizer – Trendler, KPI ve Öneriler")
-    if sim_mode:
-        st.info("🧪 Simülasyon Modu Aktif. Arc Optimizer çıktıları simüle edilen veri üzerinden hesaplanır.")
-
-    df = to_df(get_active_data(sim_mode))
-    if df.empty:
-        st.info("Önce veri oluşturun (simülasyon veya canlı kayıt).")
-        return
-
-    kpi = kpi_pack(df)
-    last = kpi["last"]
-    model, feat_cols, target_cols = load_arc_model()
-
-    st.markdown("### Proses Trendi (24 saat) + AI Tahmin (sağ taraf)")
-    build_24h_actual_vs_ai_chart(df, model, feat_cols, target_cols, height=420)
-
-    st.markdown("---")
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Son Şarj kWh/t", f"{float(last.get('kwh_per_t')):.1f}" if pd.notna(last.get("kwh_per_t")) else "-")
-    c2.metric("Son Şarj Elektrot", f"{float(last.get('electrode_kg_per_heat')):.2f} kg/şarj" if pd.notna(last.get("electrode_kg_per_heat")) else "-")
-    c3.metric("Son Tap Sıcaklığı", f"{float(last.get('tap_temp_c')):.0f} °C" if pd.notna(last.get("tap_temp_c")) else "-")
-    c4.metric("Son 10 Şarj Ort. kWh/t", f"{kpi['avg_kwh_t_10']:.1f}" if not np.isnan(kpi["avg_kwh_t_10"]) else "-")
-
-
-# =========================================================
-# HSE Vision (Demo) – Repo’dan otomatik video + autoplay loop (PC’de alttan kesmeyi düzelt)
-# =========================================================
-def _guess_mime(path: str) -> str:
-    p = (path or "").lower()
-    if p.endswith(".mp4") or p.endswith(".m4v"):
-        return "video/mp4"
-    if p.endswith(".mov"):
-        return "video/quicktime"
-    return "video/mp4"
-
-
-def load_demo_video_from_repo() -> Tuple[Optional[bytes], Optional[str], Optional[str]]:
-    candidates = [
-        "assets/hse_demo.mp4",
-        "assets/hse_demo.mov",
-        "assets/demo.mp4",
-        "assets/demo.mov",
-        "assets/videos/hse_demo.mp4",
-        "assets/videos/demo.mp4",
-        "assets/video/hse_demo.mp4",
-        "assets/video/demo.mp4",
-        "assets/hse.mp4",
-    ]
-    for p in candidates:
-        try:
-            if os.path.exists(p) and os.path.isfile(p):
-                with open(p, "rb") as f:
-                    b = f.read()
-                return b, _guess_mime(p), os.path.basename(p)
-        except Exception:
-            continue
-    return None, None, None
-
-
-def show_hse_vision_demo_page(sim_mode: bool):
-    st.markdown("## 🦺 HSE Vision (Demo) – Kamera & Risk Değerlendirme")
-
-    RISK_TYPES = [
-        "Baretsiz giriş",
-        "SLAG / SPLASH",
-        "Yük altında çalışma",
-        "Sabitlenmemiş yük / düşen parça",
-        "Yetkisiz riskli bölgeye giriş",
-        "Sıcak yüzey / yanık riski",
-        "Forklift–yaya yakınlaşma",
-        "LOTO / enerji izolasyonu ihlali",
-    ]
-    risk_tipi = st.selectbox("Risk tipi", RISK_TYPES, index=0)
-
-    RISK_PROFILE = {
-        "Baretsiz giriş": {"base": 65, "olasilik": 58, "tmin": 90, "tmax": 150},
-        "SLAG / SPLASH": {"base": 78, "olasilik": 70, "tmin": 45, "tmax": 90},
-        "Yük altında çalışma": {"base": 82, "olasilik": 74, "tmin": 40, "tmax": 80},
-        "Sabitlenmemiş yük / düşen parça": {"base": 80, "olasilik": 72, "tmin": 45, "tmax": 90},
-        "Yetkisiz riskli bölgeye giriş": {"base": 76, "olasilik": 68, "tmin": 50, "tmax": 95},
-        "Sıcak yüzey / yanık riski": {"base": 70, "olasilik": 62, "tmin": 60, "tmax": 110},
-        "Forklift–yaya yakınlaşma": {"base": 79, "olasilik": 71, "tmin": 45, "tmax": 90},
-        "LOTO / enerji izolasyonu ihlali": {"base": 84, "olasilik": 78, "tmin": 35, "tmax": 75},
-    }
-
-    prof = RISK_PROFILE.get(risk_tipi, {"base": 70, "olasilik": 60, "tmin": 60, "tmax": 120})
-    base_score = int(prof["base"])
-    olasilik = int(prof["olasilik"])
-    tmin, tmax = int(prof["tmin"]), int(prof["tmax"])
-
-    now = datetime.now(TZ)
-    wobble = int((now.second % 9) - 4)  # -4..+4
-    score = int(max(0, min(100, base_score + wobble)))
-
-    critical_threshold = 75
-    if score >= 75:
-        durum = "🔴 KRİTİK"
-    elif score >= 50:
-        durum = "🟡 DİKKAT"
-    else:
-        durum = "🟢 NORMAL"
-
-    # Trend
-    horizon_min = 15
-    drift = +1.2 if score >= 75 else (+0.3 if score >= 50 else -0.8)
-
-    actual_points = []
-    for i in range(6, -1, -1):
-        t = now - timedelta(minutes=i)
-        v = score - int(0.5 * i) + (1 if (i % 3 == 0) else 0)
-        v = int(max(0, min(100, v)))
-        actual_points.append({"ts": t, "risk": v, "type": "Aktüel"})
-
-    future_points = []
-    v = float(score)
-    for m in range(0, horizon_min + 1, 1):
-        t = now + timedelta(minutes=m)
-        v = max(0.0, min(100.0, v + drift))
-        future_points.append({"ts": t, "risk": float(v), "type": "Potansiyel (AI)"})
-
-    risk_df = pd.DataFrame(actual_points + future_points)
-
-    crit_time = None
-    for row in future_points:
-        if row["risk"] >= critical_threshold:
-            crit_time = row["ts"]
-            break
-
-    # Video
-    video_bytes, mime, vname = load_demo_video_from_repo()
-    has_video = bool(video_bytes)
-
-    left, right = st.columns([2.2, 1.3])
-
-    with left:
-        if has_video:
-            b64 = base64.b64encode(video_bytes).decode("utf-8")
-
-            # ✅ PC’de “alttan kesik” görünme sebebi: components.html yüksekliği videonun
-            # geniş ekranda büyüyen yüksekliğine yetmiyordu.
-            # Çözüm: aspect-ratio ile responsive kutu + components.html height’i büyüt + max-height:75vh.
-            components.html(
-                f"""
-                <style>
-                  .hse-wrap {{
-                    width: 100%;
-                    aspect-ratio: 16 / 9;
-                    max-height: 75vh;
-                    background: #000;
-                    border-radius: 14px;
-                    overflow: hidden;
-                    position: relative;
-                  }}
-                  .hse-wrap video {{
-                    width: 100%;
-                    height: 100%;
-                    display: block;
-                    object-fit: contain;
-                    background: #000;
-                  }}
-                </style>
-
-                <div class="hse-wrap">
-                  <video id="hsevid"
-                         autoplay loop controls playsinline preload="auto"
-                         style="margin:0; padding:0;">
-                    <source src="data:{mime};base64,{b64}" type="{mime}">
-                  </video>
-                </div>
-
-                <script>
-                  (function() {{
-                    const v = document.getElementById('hsevid');
-                    if (!v) return;
-
-                    // Her durumda autoplay dene (tarayıcı izin verirse sesli, vermezse muted)
-                    const tryPlay = async () => {{
-                      try {{
-                        v.muted = false;
-                        await v.play();
-                      }} catch(e) {{
-                        try {{
-                          v.muted = true;
-                          await v.play();
-                        }} catch(e2) {{}}
-                      }}
-                    }};
-
-                    // DOM hazır olunca dene
-                    if (document.readyState === "complete") tryPlay();
-                    else window.addEventListener("load", tryPlay);
-                  }})();
-                </script>
-                """,
-                # geniş PC ekranlarda da kesilmesin diye artırıldı
-                height=780,
-            )
-
-            if vname:
-                st.caption(f"Demo video: {vname} (otomatik başlar, loop)")
-        else:
-            components.html(
-                """
-                <div style="
-                    width:100%;
-                    height:520px;
-                    border-radius:14px;
-                    background: linear-gradient(135deg, #111, #333);
-                    display:flex;
-                    align-items:center;
-                    justify-content:center;
-                    color:#fff;
-                    font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto;
-                    text-align:center;
-                    padding:24px;
-                ">
-                  <div>
-                    <div style="font-size:20px; font-weight:800; margin-bottom:8px;">📷 Demo video bulunamadı</div>
-                    <div style="opacity:0.85; font-size:14px; line-height:1.4;">
-                      Lütfen videoyu repo içine örn. <b>assets/hse_demo.mp4</b> olarak ekleyin.
-                    </div>
-                  </div>
-                </div>
-                """,
-                height=520,
-            )
-
-    with right:
-        st.markdown("### 🧠 Genel HSE Risk Skoru")
-        st.metric("Risk Skoru (0–100)", f"{score}")
-
-        ch = (
-            alt.Chart(risk_df)
-            .mark_line()
-            .encode(
-                x=alt.X("ts:T", title="Zaman", axis=alt.Axis(format="%H:%M", labelAngle=-25)),
-                y=alt.Y("risk:Q", title="Risk Skoru", scale=alt.Scale(domain=[0, 100])),
-                strokeDash=alt.StrokeDash(
-                    "type:N",
-                    title=None,
-                    scale=alt.Scale(domain=["Aktüel", "Potansiyel (AI)"], range=[[1, 0], [6, 4]]),
-                ),
-            )
-            .properties(height=180)
-        )
-
-        layers = [ch]
-        thr_df = pd.DataFrame({"y": [critical_threshold]})
-        layers.append(alt.Chart(thr_df).mark_rule(strokeDash=[4, 4], color="red").encode(y="y:Q"))
-
-        if crit_time is not None:
-            ct = pd.DataFrame({"ts": [crit_time]})
-            layers.append(alt.Chart(ct).mark_rule(strokeDash=[6, 4], color="red").encode(x="ts:T"))
-            st.caption(f"⏱️ Tahmini kritik eşik zamanı: **{crit_time.strftime('%H:%M')}**")
-
-        st.altair_chart(alt.layer(*layers), use_container_width=True)
-
-        st.markdown("### 📊 Risk Değerlendirme")
-        st.table([
-            {"Parametre": "Risk Tipi", "Değer": risk_tipi},
-            {"Parametre": "Olasılık", "Değer": f"%{olasilik}"},
-            {"Parametre": "Tahmini Süre", "Değer": f"{tmin}–{tmax} sn"},
-            {"Parametre": "Durum", "Değer": durum},
-        ])
-
-    # Video ALTINDA uyarı
-    if durum.startswith("🔴"):
-        st.error(f"⚠️ {risk_tipi} — KRİTİK RİSK")
-    elif durum.startswith("🟡"):
-        st.warning(f"⚠️ {risk_tipi} — DİKKAT")
-    else:
-        st.success(f"✅ {risk_tipi} — NORMAL")
-
-
-# =========================================================
-# SIDEBAR: NAV + HIZLI SİM AKIŞ
-# =========================================================
-def sidebar_controls():
-    st.markdown("### FeCr AI")
-
-    sim_mode = st.toggle(
-        "Simülasyon Modu",
-        value=True,
-        help="Açıkken sistem canlı veri yerine simülasyon veri kullanır.",
-        key="sidebar_sim_mode",
-    )
-
-    if sim_mode:
-        ensure_simulation_data_initialized()
-    else:
-        st.session_state.sim_data = None
-
-    st.divider()
-
-    pages = ["Setup", "Canlı Veri", "Hedefler", "ArcOptimizer", "HSE Vision (Demo)"]
-    st.selectbox(
-        "Sayfa",
-        pages,
-        index=pages.index(st.session_state.classic_page) if st.session_state.classic_page in pages else pages.index("ArcOptimizer"),
-        key="classic_page",
-    )
-
-    st.divider()
-
-    if sim_mode:
-        st.markdown("### 🔄 Hızlı Akış")
-        batch = st.slider("Batch (şarj/adım)", 1, 500, SIM_STREAM_BATCH_DEFAULT, 1, key="sidebar_batch")
-
-        bind_toggle("9000 şarjı zamanla oku", "sim_stream_enabled", "sb_sim_stream_enabled")
-        bind_toggle("Otomatik ilerlet", "sim_stream_autostep", "sb_sim_stream_autostep")
-
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("▶️ İlerlet", key="sb_advance"):
-                advance_sim_stream(int(batch))
-                st.rerun()
-        with c2:
-            if st.button("⟲ Reset", key="sb_reset"):
-                reset_sim_to_1000()
-                st.rerun()
-
-        st.caption(f"İlerleme: {int(st.session_state.sim_stream_progress)} / {SIM_STREAM_TOTAL}")
-
-        if st.session_state.sim_stream_enabled and st.session_state.sim_stream_autostep:
-            cur = int(st.session_state.sim_stream_progress)
-            if st.session_state.sim_stream_last_step_progress != cur:
-                st.session_state.sim_stream_last_step_progress = cur
-                advance_sim_stream(int(batch))
-
-    return sim_mode
-
-
-# =========================================================
-# MAIN
-# =========================================================
-def main():
-    with st.sidebar:
-        sim_mode = sidebar_controls()
-
-    page = st.session_state.classic_page
-    if page == "Setup":
-        show_setup_form()
-    elif page == "Canlı Veri":
-        show_runtime_page(sim_mode)
-    elif page == "Hedefler":
-        show_targets_page(sim_mode)
-    elif page == "ArcOptimizer":
-        show_arc_optimizer_page(sim_mode)
-    else:
-        show_hse_vision_demo_page(sim_mode)
-
-
-if __name__ == "__main__":
-    main()
+        note
