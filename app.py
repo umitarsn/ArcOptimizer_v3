@@ -5,7 +5,7 @@ import random
 import base64
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
-from typing import Optional, List
+from typing import Optional, List, Tuple
 
 import numpy as np
 import pandas as pd
@@ -33,21 +33,6 @@ st.markdown(
     section[data-testid="stSidebar"] { width: 340px !important; }
     section[data-testid="stSidebar"] > div { width: 340px !important; }
     .block-container { padding-top: 1.2rem; padding-bottom: 2.0rem; }
-
-    /* Video her zaman tam genişlik */
-    div[data-testid="stVideo"] video { width: 100% !important; height: auto !important; }
-    .fullw-video video { width: 100% !important; height: auto !important; border-radius: 14px; }
-
-    /* Basit overlay (etiketsiz) */
-    .bbox-wrap { position: relative; width: 100%; border-radius: 14px; overflow: hidden; background:#000; }
-    .bbox-wrap video { display:block; width:100%; height:auto; }
-    .bbox-rect {
-        position:absolute;
-        border: 4px solid #ff2b2b;
-        box-sizing: border-box;
-        border-radius: 4px;
-        pointer-events: none;
-    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -60,12 +45,8 @@ RUNTIME_SAVE_PATH = "data/runtime_data.json"
 MODEL_SAVE_PATH = "models/arc_optimizer_model.pkl"
 TARGETS_SAVE_PATH = "data/targets.json"
 
-# Klasörler
 os.makedirs("data", exist_ok=True)
 os.makedirs("models", exist_ok=True)
-
-# HSE demo video (repo içinde)
-DEFAULT_HSE_VIDEO_PATH = "assets/hse_demo.mp4"  # repo'ya koy: assets/hse_demo.mp4
 
 # Dijital ikiz hedefleri
 DIGITAL_TWIN_HISTORICAL_HEATS = 1000
@@ -84,6 +65,9 @@ def _init_state():
     defaults = {
         "info_state": {},
         "profit_info_state": {},
+        "hse_video_bytes": None,
+        "hse_video_mime": None,
+        "hse_video_name": None,
         "sim_data": None,
         "sim_full_data": None,
         # sim akış state
@@ -91,6 +75,8 @@ def _init_state():
         "sim_stream_autostep": True,
         "sim_stream_progress": DIGITAL_TWIN_HISTORICAL_HEATS,
         "sim_stream_last_step_progress": None,
+        "sim_stream_autorefresh": False,
+        "sim_stream_refresh_sec": 2,
         # model meta
         "model_status": "Henüz eğitilmedi.",
         "model_last_train_time": None,
@@ -102,11 +88,6 @@ def _init_state():
         # targets
         "targets_loaded": False,
         "targets": None,
-
-        # HSE (repo video cache)
-        "hse_repo_video_loaded": False,
-        "hse_repo_video_bytes": None,
-        "hse_repo_video_mime": "video/mp4",
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -132,13 +113,37 @@ def bind_toggle(label: str, state_key: str, widget_key: str, help_text: Optional
     )
 
 
+def bind_number_int(
+    label: str,
+    state_key: str,
+    widget_key: str,
+    min_v: int,
+    max_v: int,
+    step: int = 1,
+    help_text: Optional[str] = None,
+):
+    def _sync():
+        st.session_state[state_key] = int(st.session_state[widget_key])
+
+    return st.number_input(
+        label,
+        min_value=min_v,
+        max_value=max_v,
+        value=int(st.session_state.get(state_key, min_v)),
+        step=step,
+        key=widget_key,
+        help=help_text,
+        on_change=_sync,
+    )
+
+
 # =========================================================
 # TARGETS (Hedefler / Recipe)
 # =========================================================
 def default_targets():
     return {
         "meta": {
-            "source_mode": "Mühendis",  # "Mühendis" | "AI" | "Hibrit"
+            "source_mode": "Mühendis",   # "Mühendis" | "AI" | "Hibrit"
             "last_updated": datetime.now(TZ).isoformat(),
             "updated_by": "system",
             "notes": "Başlangıç hedefleri (demo).",
@@ -149,6 +154,7 @@ def default_targets():
             "electrode_kg_per_t": {"low": 0.040, "high": 0.060, "unit": "kg/t"},
             "o2_flow_nm3h": {"low": 700.0, "high": 1200.0, "unit": "Nm³/h"},
             "panel_delta_t_c": {"low": 0.0, "high": 25.0, "unit": "°C"},
+            # Power quality / elektrik (kolon yoksa sapma hesaplamaz)
             "cos_phi_furnace": {"low": 0.80, "high": 0.92, "unit": "-"},
             "cos_phi_ladle": {"low": 0.90, "high": 0.97, "unit": "-"},
         },
@@ -230,15 +236,15 @@ runtime_data = load_runtime_data()
 def _make_heat_row(ts: datetime, idx: int):
     heat_id = f"SIM-{idx+1}"
 
-    tap_weight = 35 + random.uniform(-3, 3)  # ton
-    kwh_per_t = 420 + random.uniform(-25, 25)  # kWh/t
-    energy_kwh = tap_weight * kwh_per_t  # kWh
-    duration_min = 55 + random.uniform(-10, 10)  # dk
-    tap_temp = 1610 + random.uniform(-15, 15)  # °C
-    o2_flow = 950 + random.uniform(-150, 150)  # Nm³/h
-    slag_foaming = random.randint(3, 9)  # 0–10
-    panel_delta_t = 18 + random.uniform(-5, 8)  # °C
-    electrode_cons = 1.9 + random.uniform(-0.3, 0.3)  # kg/heat
+    tap_weight = 35 + random.uniform(-3, 3)          # ton
+    kwh_per_t = 420 + random.uniform(-25, 25)        # kWh/t
+    energy_kwh = tap_weight * kwh_per_t              # kWh
+    duration_min = 55 + random.uniform(-10, 10)      # dk
+    tap_temp = 1610 + random.uniform(-15, 15)        # °C
+    o2_flow = 950 + random.uniform(-150, 150)        # Nm³/h
+    slag_foaming = random.randint(3, 9)              # 0–10
+    panel_delta_t = 18 + random.uniform(-5, 8)       # °C
+    electrode_cons = 1.9 + random.uniform(-0.3, 0.3) # kg/heat
 
     return {
         "timestamp": ts.isoformat(),
@@ -298,15 +304,9 @@ def advance_sim_stream(batch: int):
 # =========================================================
 def get_arc_training_data(df: pd.DataFrame):
     required_cols = [
-        "tap_weight_t",
-        "duration_min",
-        "energy_kwh",
-        "o2_flow_nm3h",
-        "slag_foaming_index",
-        "panel_delta_t_c",
-        "electrode_kg_per_heat",
-        "kwh_per_t",
-        "tap_temp_c",
+        "tap_weight_t", "duration_min", "energy_kwh", "o2_flow_nm3h",
+        "slag_foaming_index", "panel_delta_t_c", "electrode_kg_per_heat",
+        "kwh_per_t", "tap_temp_c",
     ]
     for col in required_cols:
         if col not in df.columns:
@@ -318,13 +318,8 @@ def get_arc_training_data(df: pd.DataFrame):
         return None, None, None, None
 
     feature_cols = [
-        "tap_weight_t",
-        "duration_min",
-        "energy_kwh",
-        "o2_flow_nm3h",
-        "slag_foaming_index",
-        "panel_delta_t_c",
-        "electrode_kg_per_heat",
+        "tap_weight_t", "duration_min", "energy_kwh", "o2_flow_nm3h",
+        "slag_foaming_index", "panel_delta_t_c", "electrode_kg_per_heat",
     ]
     target_cols = ["kwh_per_t", "tap_temp_c"]
 
@@ -485,6 +480,31 @@ def money_pack(df: pd.DataFrame, energy_price=0.12, electrode_price=3.0, annual_
 
     eur_per_year = eur_per_t * float(annual_ton)
     return {"eur_per_t": eur_per_t, "eur_per_year": eur_per_year}
+
+
+def distro_summary(df: pd.DataFrame):
+    out = []
+
+    def add_metric(name, s: pd.Series, fmt="{:.2f}"):
+        s = s.dropna()
+        if len(s) < 5:
+            return
+        out.append({
+            "Gösterge": name,
+            "p10": fmt.format(s.quantile(0.10)),
+            "p50": fmt.format(s.quantile(0.50)),
+            "p90": fmt.format(s.quantile(0.90)),
+            "Son 3 Ort.": fmt.format(s.tail(3).mean()) if len(s) >= 3 else "-",
+        })
+
+    if "kwh_per_t" in df.columns:
+        add_metric("kWh/t", df["kwh_per_t"], fmt="{:.1f}")
+    if "electrode_kg_per_t" in df.columns:
+        add_metric("Elektrot (kg/t)", df["electrode_kg_per_t"], fmt="{:.3f}")
+    if "tap_temp_c" in df.columns:
+        add_metric("Tap T (°C)", df["tap_temp_c"], fmt="{:.0f}")
+
+    return pd.DataFrame(out)
 
 
 # =========================================================
@@ -926,20 +946,9 @@ def show_runtime_page(sim_mode: bool):
 
     st.markdown("### Kayıtlı Veriler")
     cols = [
-        "timestamp_dt",
-        "heat_id",
-        "tap_weight_t",
-        "duration_min",
-        "energy_kwh",
-        "kwh_per_t",
-        "tap_temp_c",
-        "electrode_kg_per_heat",
-        "electrode_kg_per_t",
-        "slag_foaming_index",
-        "panel_delta_t_c",
-        "o2_flow_nm3h",
-        "grade",
-        "ems_on",
+        "timestamp_dt", "heat_id", "tap_weight_t", "duration_min", "energy_kwh",
+        "kwh_per_t", "tap_temp_c", "electrode_kg_per_heat", "electrode_kg_per_t",
+        "slag_foaming_index", "panel_delta_t_c", "o2_flow_nm3h", "grade", "ems_on",
     ]
     show_cols = [c for c in cols if c in df.columns]
     st.dataframe(df[show_cols], use_container_width=True)
@@ -1315,130 +1324,109 @@ def show_arc_optimizer_page(sim_mode: bool):
 
 
 # =========================================================
-# HSE Vision (Demo) – Basit
+# HSE Vision (Demo) – Repo’dan otomatik video + autoplay loop
 # =========================================================
-def _load_repo_video_once():
-    if st.session_state.hse_repo_video_loaded:
-        return
+def _guess_mime(path: str) -> str:
+    p = (path or "").lower()
+    if p.endswith(".mp4") or p.endswith(".m4v"):
+        return "video/mp4"
+    if p.endswith(".mov"):
+        return "video/quicktime"
+    return "video/mp4"
 
-    st.session_state.hse_repo_video_loaded = True
-    if os.path.exists(DEFAULT_HSE_VIDEO_PATH) and os.path.isfile(DEFAULT_HSE_VIDEO_PATH):
+
+def load_demo_video_from_repo() -> Tuple[Optional[bytes], Optional[str], Optional[str]]:
+    """
+    Repo içine koyduğun demo videoyu otomatik bulur ve okur.
+    - assets/ altında farklı isimlerle bulunabilir.
+    - 'assets' bir DOSYA ise (klasör değilse) hata vermemek için makedirs yok.
+    """
+    candidates = [
+        "assets/hse_demo.mp4",
+        "assets/hse_demo.mov",
+        "assets/demo.mp4",
+        "assets/demo.mov",
+        "assets/videos/hse_demo.mp4",
+        "assets/videos/demo.mp4",
+        "assets/video/hse_demo.mp4",
+        "assets/video/demo.mp4",
+        "assets/hse.mp4",
+    ]
+
+    for p in candidates:
         try:
-            with open(DEFAULT_HSE_VIDEO_PATH, "rb") as f:
-                st.session_state.hse_repo_video_bytes = f.read()
-            st.session_state.hse_repo_video_mime = "video/mp4"
+            if os.path.exists(p) and os.path.isfile(p):
+                with open(p, "rb") as f:
+                    b = f.read()
+                return b, _guess_mime(p), os.path.basename(p)
         except Exception:
-            st.session_state.hse_repo_video_bytes = None
-    else:
-        st.session_state.hse_repo_video_bytes = None
+            continue
 
-
-def _render_video_fullwidth(video_bytes: bytes, mime: str = "video/mp4", show_bbox: bool = False):
-    # BBOX koordinatları demo amaçlı (yüzde)
-    # İstersen bunu videoya göre daha iyi ayarlarız.
-    bbox = {"x": 0.42, "y": 0.18, "w": 0.16, "h": 0.70}  # etiketsiz
-
-    b64 = base64.b64encode(video_bytes).decode("utf-8")
-    if show_bbox:
-        components.html(
-            f"""
-            <div class="bbox-wrap">
-              <video controls playsinline>
-                <source src="data:{mime};base64,{b64}" type="{mime}">
-              </video>
-              <div class="bbox-rect" style="
-                left:{bbox['x']*100:.2f}%;
-                top:{bbox['y']*100:.2f}%;
-                width:{bbox['w']*100:.2f}%;
-                height:{bbox['h']*100:.2f}%;
-              "></div>
-            </div>
-            """,
-            height=520,
-        )
-    else:
-        components.html(
-            f"""
-            <div class="fullw-video">
-              <video controls playsinline style="width:100%; height:auto; border-radius:14px;">
-                <source src="data:{mime};base64,{b64}" type="{mime}">
-              </video>
-            </div>
-            """,
-            height=520,
-        )
+    return None, None, None
 
 
 def show_hse_vision_demo_page(sim_mode: bool):
     st.markdown("## 🦺 HSE Vision (Demo) – Kamera & Risk Değerlendirme")
 
-    # Basit: sadece Risk tipi
+    # Basit: sadece risk tipi
     RISK_TYPES = [
         "Baretsiz giriş",
-        "Yetkisiz riskli bölgeye giriş",
-        "Yük altında çalışma",
-        "Forklift–yaya yakınlaşma",
-        "Sabitlenmemiş yük / düşen parça",
-        "Sıcak yüzey / yanık riski",
         "SLAG / SPLASH",
+        "Yük altında çalışma",
+        "Sabitlenmemiş yük / düşen parça",
+        "Yetkisiz riskli bölgeye giriş",
+        "Sıcak yüzey / yanık riski",
+        "Forklift–yaya yakınlaşma",
         "LOTO / enerji izolasyonu ihlali",
     ]
 
-    # default: Baretsiz giriş
-    risk_tipi = st.selectbox("Risk tipi", RISK_TYPES, index=0, key="hse_risk_type")
+    risk_tipi = st.selectbox("Risk tipi", RISK_TYPES, index=0)
 
-    # Video (Repo’dan otomatik)
-    _load_repo_video_once()
-    has_video = bool(st.session_state.get("hse_repo_video_bytes"))
-    video_bytes = st.session_state.get("hse_repo_video_bytes")
-    mime = st.session_state.get("hse_repo_video_mime") or "video/mp4"
+    # Risk tipi → sabit skor profili (demo)
+    RISK_PROFILE = {
+        "Baretsiz giriş": {"base": 65, "olasilik": 58, "tmin": 90, "tmax": 150},
+        "SLAG / SPLASH": {"base": 78, "olasilik": 70, "tmin": 45, "tmax": 90},
+        "Yük altında çalışma": {"base": 82, "olasilik": 74, "tmin": 40, "tmax": 80},
+        "Sabitlenmemiş yük / düşen parça": {"base": 80, "olasilik": 72, "tmin": 45, "tmax": 90},
+        "Yetkisiz riskli bölgeye giriş": {"base": 76, "olasilik": 68, "tmin": 50, "tmax": 95},
+        "Sıcak yüzey / yanık riski": {"base": 70, "olasilik": 62, "tmin": 60, "tmax": 110},
+        "Forklift–yaya yakınlaşma": {"base": 79, "olasilik": 71, "tmin": 45, "tmax": 90},
+        "LOTO / enerji izolasyonu ihlali": {"base": 84, "olasilik": 78, "tmin": 35, "tmax": 75},
+    }
 
-    # Risk skoru (sadece risk tipine göre)
-    base_weight = {
-        "Baretsiz giriş": 68,
-        "Yetkisiz riskli bölgeye giriş": 62,
-        "Yük altında çalışma": 75,
-        "Forklift–yaya yakınlaşma": 70,
-        "Sabitlenmemiş yük / düşen parça": 72,
-        "Sıcak yüzey / yanık riski": 60,
-        "SLAG / SPLASH": 78,
-        "LOTO / enerji izolasyonu ihlali": 74,
-    }.get(risk_tipi, 60)
+    prof = RISK_PROFILE.get(risk_tipi, {"base": 70, "olasilik": 60, "tmin": 60, "tmax": 120})
+    base_score = int(prof["base"])
+    olasilik = int(prof["olasilik"])
+    tmin, tmax = int(prof["tmin"]), int(prof["tmax"])
 
-    score = int(max(0, min(100, base_weight)))
-    olasilik = int(max(1, min(99, round(score * 0.9))))
+    # Küçük deterministik oynama (grafik canlı dursun ama stabil kalsın)
+    now = datetime.now(TZ)
+    wobble = int((now.second % 9) - 4)  # -4..+4
+    score = int(max(0, min(100, base_score + wobble)))
 
-    # süre (demo)
-    if score >= 75:
-        tmin, tmax = (45, 90)
-    elif score >= 55:
-        tmin, tmax = (90, 150)
-    else:
-        tmin, tmax = (120, 200)
-
+    critical_threshold = 75
     if score >= 75:
         durum = "🔴 KRİTİK"
-        alarm = True
-        banner = f"⚠️ {risk_tipi} — KRİTİK RİSK"
     elif score >= 50:
         durum = "🟡 DİKKAT"
-        alarm = False
-        banner = f"⚠️ {risk_tipi} — DİKKAT"
     else:
         durum = "🟢 NORMAL"
-        alarm = False
-        banner = None
 
-    # Trend (aktüel + AI)
+    # Trend (son dakikalar) + AI tahmin (sonrası)
     horizon_min = 15
-    now = datetime.now(TZ)
 
-    drift = +1.6 if score >= 60 else -1.0
+    # Drift: kritikse yukarı, değilse yatay/aşağı
+    if score >= 75:
+        drift = +1.2
+    elif score >= 50:
+        drift = +0.3
+    else:
+        drift = -0.8
 
     actual_points = []
     for i in range(6, -1, -1):
         t = now - timedelta(minutes=i)
-        v = score - int(0.5 * i)
+        v = score - int(0.5 * i) + (1 if (i % 3 == 0) else 0)
         v = int(max(0, min(100, v)))
         actual_points.append({"ts": t, "risk": v, "type": "Aktüel"})
 
@@ -1451,27 +1439,80 @@ def show_hse_vision_demo_page(sim_mode: bool):
 
     risk_df = pd.DataFrame(actual_points + future_points)
 
-    critical_threshold = 75
     crit_time = None
     for row in future_points:
         if row["risk"] >= critical_threshold:
             crit_time = row["ts"]
             break
 
+    # Video: repo’dan otomatik
+    video_bytes, mime, vname = load_demo_video_from_repo()
+    has_video = bool(video_bytes)
+
     left, right = st.columns([2.2, 1.3])
 
     with left:
-        if has_video and video_bytes:
-            # Kritikse bbox göster (etiketsiz), değilse normal video
-            _render_video_fullwidth(video_bytes, mime=mime, show_bbox=alarm)
-        else:
-            st.info(f"Repo’da video bulunamadı: `{DEFAULT_HSE_VIDEO_PATH}`")
+        if has_video:
+            b64 = base64.b64encode(video_bytes).decode("utf-8")
+            components.html(
+                f"""
+                <div style="width:100%; border-radius:14px; overflow:hidden; background:#000;">
+                  <video id="hsevid" autoplay loop controls playsinline
+                         style="width:100%; height:auto; display:block; object-fit:contain; background:#000;">
+                    <source src="data:{mime};base64,{b64}" type="{mime}">
+                  </video>
+                </div>
 
-        # ✅ Video altı banner (mutlaka görünsün)
-        if banner:
-            st.error(banner)
+                <script>
+                  // Autoplay + loop dene (tarayıcı politikaları sesli autoplay'i engelleyebilir).
+                  (function() {{
+                    const v = document.getElementById('hsevid');
+                    if (!v) return;
+                    const tryPlay = async () => {{
+                      try {{
+                        await v.play();
+                      }} catch(e) {{
+                        // Sessiz autoplay'e düş (politikadan dolayı)
+                        try {{
+                          v.muted = true;
+                          await v.play();
+                        }} catch(e2) {{}}
+                      }}
+                    }};
+                    tryPlay();
+                  }})();
+                </script>
+                """,
+                height=520,
+            )
+            if vname:
+                st.caption(f"Demo video: {vname} (otomatik, loop)")
         else:
-            st.success("✅ Aktif bir risk yok.")
+            components.html(
+                """
+                <div style="
+                    width:100%;
+                    height:520px;
+                    border-radius:14px;
+                    background: linear-gradient(135deg, #111, #333);
+                    display:flex;
+                    align-items:center;
+                    justify-content:center;
+                    color:#fff;
+                    font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto;
+                    text-align:center;
+                    padding:24px;
+                ">
+                  <div>
+                    <div style="font-size:20px; font-weight:800; margin-bottom:8px;">📷 Demo video bulunamadı</div>
+                    <div style="opacity:0.85; font-size:14px; line-height:1.4;">
+                      Lütfen videoyu repo içine örn. <b>assets/hse_demo.mp4</b> olarak ekleyin.
+                    </div>
+                  </div>
+                </div>
+                """,
+                height=520,
+            )
 
     with right:
         st.markdown("### 🧠 Genel HSE Risk Skoru")
@@ -1504,14 +1545,20 @@ def show_hse_vision_demo_page(sim_mode: bool):
         st.altair_chart(alt.layer(*layers), use_container_width=True)
 
         st.markdown("### 📊 Risk Değerlendirme")
-        st.table(
-            [
-                {"Parametre": "Risk Tipi", "Değer": risk_tipi},
-                {"Parametre": "Olasılık", "Değer": f"%{olasilik}"},
-                {"Parametre": "Tahmini Süre", "Değer": f"{tmin}–{tmax} sn"},
-                {"Parametre": "Durum", "Değer": durum},
-            ]
-        )
+        st.table([
+            {"Parametre": "Risk Tipi", "Değer": risk_tipi},
+            {"Parametre": "Olasılık", "Değer": f"%{olasilik}"},
+            {"Parametre": "Tahmini Süre", "Değer": f"{tmin}–{tmax} sn"},
+            {"Parametre": "Durum", "Değer": durum},
+        ])
+
+    # Video ALTINDA uyarı alanı (tam genişlik)
+    if durum.startswith("🔴"):
+        st.error(f"⚠️ {risk_tipi} — KRİTİK RİSK")
+    elif durum.startswith("🟡"):
+        st.warning(f"⚠️ {risk_tipi} — DİKKAT")
+    else:
+        st.success(f"✅ {risk_tipi} — NORMAL")
 
 
 # =========================================================
