@@ -45,14 +45,38 @@ RUNTIME_SAVE_PATH = "data/runtime_data.json"
 MODEL_SAVE_PATH = "models/arc_optimizer_model.pkl"
 TARGETS_SAVE_PATH = "data/targets.json"
 
-# ✅ GitHub repo içinde otomatik gösterilecek demo video yolu
-# Bu dosyayı projene ekle: assets/hse_demo.mp4 (veya aşağıdaki path'i değiştir)
-HSE_DEMO_VIDEO_PATH = "assets/hse_demo.mp4"
-HSE_DEMO_VIDEO_MIME = "video/mp4"
+# Repo'ya koyacağın demo video (otomatik okunacak)
+HSE_DEMO_VIDEO_CANDIDATES = [
+    "assets/hse_demo.mp4",
+    "assets/hse_demo.mov",
+    "assets/hse_demo.m4v",
+    "assets/demo.mp4",
+]
 
-os.makedirs("data", exist_ok=True)
-os.makedirs("models", exist_ok=True)
-os.makedirs("assets", exist_ok=True)
+
+def safe_makedirs(path: str):
+    """
+    FileExistsError fix:
+    - path klasörse sorun yok.
+    - path dosyaysa klasör oluşturmaya çalışma (Streamlit crash etmesin).
+    """
+    if os.path.exists(path):
+        if os.path.isdir(path):
+            return True
+        st.warning(f"⚠️ '{path}' bir dosya olarak mevcut. Klasör oluşturulmadı.")
+        return False
+    try:
+        os.makedirs(path, exist_ok=True)
+        return True
+    except Exception as e:
+        st.warning(f"⚠️ Klasör oluşturulamadı: {path} · {e}")
+        return False
+
+
+safe_makedirs("data")
+safe_makedirs("models")
+safe_makedirs("assets")
+
 
 # Dijital ikiz hedefleri
 DIGITAL_TWIN_HISTORICAL_HEATS = 1000
@@ -71,6 +95,9 @@ def _init_state():
     defaults = {
         "info_state": {},
         "profit_info_state": {},
+        "hse_video_bytes": None,
+        "hse_video_mime": None,
+        "hse_video_name": None,
         "sim_data": None,
         "sim_full_data": None,
         # sim akış state
@@ -91,9 +118,8 @@ def _init_state():
         # targets
         "targets_loaded": False,
         "targets": None,
-
-        # HSE demo state
-        "hse_bbox_demo_enabled": True,
+        # hse ui
+        "hse_risk_type_default_set": False,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -101,6 +127,22 @@ def _init_state():
 
 
 _init_state()
+
+
+# =========================================================
+# WIDGET BIND HELPERS
+# =========================================================
+def bind_toggle(label: str, state_key: str, widget_key: str, help_text: Optional[str] = None):
+    def _sync():
+        st.session_state[state_key] = st.session_state[widget_key]
+
+    return st.toggle(
+        label,
+        value=bool(st.session_state.get(state_key, False)),
+        key=widget_key,
+        help=help_text,
+        on_change=_sync,
+    )
 
 
 # =========================================================
@@ -120,7 +162,6 @@ def default_targets():
             "electrode_kg_per_t": {"low": 0.040, "high": 0.060, "unit": "kg/t"},
             "o2_flow_nm3h": {"low": 700.0, "high": 1200.0, "unit": "Nm³/h"},
             "panel_delta_t_c": {"low": 0.0, "high": 25.0, "unit": "°C"},
-            # Power quality / elektrik (kolon yoksa sapma hesaplamaz)
             "cos_phi_furnace": {"low": 0.80, "high": 0.92, "unit": "-"},
             "cos_phi_ladle": {"low": 0.90, "high": 0.97, "unit": "-"},
         },
@@ -347,25 +388,6 @@ def load_arc_model():
 
 
 # =========================================================
-# EXCEL – SETUP
-# =========================================================
-@st.cache_data
-def load_sheets():
-    file_name = "dc_saf_soru_tablosu.xlsx"
-    try:
-        xls = pd.read_excel(file_name, sheet_name=None)
-        cleaned = {}
-        for name, df in xls.items():
-            df2 = df.dropna(how="all")
-            if not df2.empty:
-                cleaned[name] = df2
-        return cleaned
-    except Exception as e:
-        st.error(f"Excel dosyası yüklenemedi: {e}")
-        return {}
-
-
-# =========================================================
 # ORTAK: DF HAZIRLA
 # =========================================================
 def get_active_data(sim_mode: bool):
@@ -449,7 +471,7 @@ def money_pack(df: pd.DataFrame, energy_price=0.12, electrode_price=3.0, annual_
 
 
 # =========================================================
-# 24H + AI TAHMİN GRAFİĞİ
+# 24H + AI TAHMİN GRAFİĞİ (ArcOptimizer)
 # =========================================================
 def build_24h_actual_vs_ai_chart(
     df: pd.DataFrame,
@@ -632,9 +654,7 @@ def build_24h_actual_vs_ai_chart(
     st.altair_chart(full, use_container_width=True)
 
     delta_min = (future_end - last_time).total_seconds() / 60.0
-    st.caption(
-        f"now çizgisi: son ölçüm. Tahmini döküm anı ~ **{delta_min:.0f} dk** sonrası (kırmızı kesikli çizgi)."
-    )
+    st.caption(f"now çizgisi: son ölçüm. Tahmini döküm anı ~ **{delta_min:.0f} dk** sonrası (kırmızı kesikli çizgi).")
 
 
 def actual_vs_potential_last50_table(df: pd.DataFrame, model, feat_cols, target_cols):
@@ -707,6 +727,22 @@ def actual_vs_potential_last50_table(df: pd.DataFrame, model, feat_cols, target_
 # =========================================================
 # 1) SETUP
 # =========================================================
+@st.cache_data
+def load_sheets():
+    file_name = "dc_saf_soru_tablosu.xlsx"
+    try:
+        xls = pd.read_excel(file_name, sheet_name=None)
+        cleaned = {}
+        for name, df in xls.items():
+            df2 = df.dropna(how="all")
+            if not df2.empty:
+                cleaned[name] = df2
+        return cleaned
+    except Exception as e:
+        st.error(f"Excel dosyası yüklenemedi: {e}")
+        return {}
+
+
 def show_setup_form():
     st.markdown("## Setup – Sabit Proses / Tasarım Verileri")
     st.markdown(
@@ -1069,25 +1105,6 @@ def show_targets_page(sim_mode: bool):
     else:
         st.info("Gösterilecek hedef/sapma metriği yok.")
 
-    st.markdown("#### ⚡ Hızlı Özet")
-    out_cnt = 0
-    ok_cnt = 0
-    for r in rows:
-        if r["Durum (Son)"] == "✅ OK":
-            ok_cnt += 1
-        elif r["Durum (Son)"] in ("⬇️ Low", "⬆️ High"):
-            out_cnt += 1
-
-    c1, c2, c3 = st.columns(3)
-    c1.metric("OK parametre", f"{ok_cnt}")
-    c2.metric("Hedef dışı", f"{out_cnt}")
-    c3.metric("Aktif hedef kaynağı", st.session_state.targets.get("meta", {}).get("source_mode", "-"))
-
-    if out_cnt > 0:
-        st.warning("Bazı parametreler hedef penceresi dışında.")
-    else:
-        st.success("Tüm izlenen parametreler hedef penceresinde (mevcut veri/kolonlara göre).")
-
 
 # =========================================================
 # 3) ARC OPTIMIZER
@@ -1129,270 +1146,154 @@ def show_arc_optimizer_page(sim_mode: bool):
         st.metric("Tahmini €/yıl (kaba)", f"{m['eur_per_year']:,.0f}")
 
     st.markdown("---")
+    st.markdown("### 🤖 AI Model / Eğitim Modu")
 
-    topA, topB = st.columns([2.2, 1.8])
+    train_mode = st.radio(
+        "Eğitim Modu",
+        ["Model Eğit", "Sürekli Eğit", "Dijital İkiz Modu"],
+        index=2,
+        key="train_mode_arc",
+    )
 
-    with topA:
-        st.markdown("### 🚨 Proses Durumu / Alarmlar")
-        alarms = []
+    current_rows = len(df)
+    progress_ratio = min(current_rows / DIGITAL_TWIN_TARGET_HEATS, 1.0) if DIGITAL_TWIN_TARGET_HEATS else 0.0
 
-        if "kwh_per_t" in df.columns and df["kwh_per_t"].notna().sum() >= 10 and pd.notna(last.get("kwh_per_t")):
-            ref = df["kwh_per_t"].dropna().tail(10).mean()
-            if float(last["kwh_per_t"]) > ref * 1.05:
-                alarms.append("⚡ kWh/t son 10 ortalamasına göre yüksek (+5%)")
+    st.caption(f"Veri ilerleme durumu: **{current_rows} / {DIGITAL_TWIN_TARGET_HEATS}** şarj")
+    st.progress(progress_ratio)
 
-        if "tap_temp_c" in df.columns and df["tap_temp_c"].notna().sum() >= 10 and pd.notna(last.get("tap_temp_c")):
-            refT = df["tap_temp_c"].dropna().tail(10).mean()
-            if abs(float(last["tap_temp_c"]) - float(refT)) > 15:
-                alarms.append("🔥 Tap sıcaklığı sapması > 15°C")
+    if train_mode == "Model Eğit":
+        if st.button("Modeli Eğit", key="btn_train_manual"):
+            train_arc_model(df, note="(Model Eğit)", min_samples=20)
 
-        if pd.notna(last.get("panel_delta_t_c")) and float(last.get("panel_delta_t_c")) > 25:
-            alarms.append("💧 Panel ΔT yüksek (>25°C)")
+    elif train_mode == "Sürekli Eğit":
+        train_arc_model(df, note="(Sürekli Eğit)", min_samples=20, silent=True)
 
-        if last.get("slag_foaming_index") is not None and pd.notna(last.get("slag_foaming_index")):
-            if float(last["slag_foaming_index"]) >= 9:
-                alarms.append("🌋 Slag foaming aşırı (≥9)")
-
-        if alarms:
-            for a in alarms:
-                st.warning(a)
+    elif train_mode == "Dijital İkiz Modu":
+        if current_rows < DIGITAL_TWIN_MIN_START:
+            st.warning(f"Dijital ikiz için en az {DIGITAL_TWIN_MIN_START} şarj gerekiyor; şu an {current_rows} var.")
         else:
-            st.success("✅ Proses stabil – belirgin alarm yok")
+            if current_rows > int(st.session_state.model_last_trained_rows_marker):
+                train_arc_model(df, note="(Dijital İkiz)", min_samples=DIGITAL_TWIN_MIN_START, silent=True)
 
-    with topB:
-        st.markdown("### 🤖 AI Model / Eğitim Modu")
+            if current_rows < DIGITAL_TWIN_TARGET_HEATS:
+                st.session_state.model_status = (
+                    f"Dijital ikiz öğrenme aşamasında "
+                    f"(%{progress_ratio*100:.1f} – {current_rows}/{DIGITAL_TWIN_TARGET_HEATS})"
+                )
+            else:
+                st.session_state.model_status = "Dijital ikiz hazır ✅ (10.000 şarj ile eğitildi)"
 
-        train_mode = st.radio(
-            "Eğitim Modu",
-            ["Model Eğit", "Sürekli Eğit", "Dijital İkiz Modu"],
-            index=2,
-            key="train_mode_arc",
+    st.write(f"**Durum:** {st.session_state.model_status}")
+    if st.session_state.model_last_train_time:
+        st.caption(
+            f"Son eğitim: {st.session_state.model_last_train_time} · "
+            f"Veri sayısı: {st.session_state.model_last_train_rows} · "
+            f"Toplam eğitim: {st.session_state.model_train_count}"
         )
 
-        current_rows = len(df)
-        progress_ratio = min(current_rows / DIGITAL_TWIN_TARGET_HEATS, 1.0) if DIGITAL_TWIN_TARGET_HEATS else 0.0
 
-        st.caption(f"Veri ilerleme durumu: **{current_rows} / {DIGITAL_TWIN_TARGET_HEATS}** şarj")
-        st.progress(progress_ratio)
-        st.caption(f"Eğitim ilerlemesi: **%{progress_ratio*100:.1f}**")
-
-        if train_mode == "Model Eğit":
-            st.caption("Mevcut veri setiyle modeli bir kez eğitir (demo / PoC).")
-            if st.button("Modeli Eğit", key="btn_train_manual"):
-                train_arc_model(df, note="(Model Eğit)", min_samples=20)
-
-        elif train_mode == "Sürekli Eğit":
-            st.caption("Her sayfa yenilemesinde model güncellenir (demo).")
-            train_arc_model(df, note="(Sürekli Eğit)", min_samples=20, silent=True)
-
-        elif train_mode == "Dijital İkiz Modu":
-            st.caption(
-                f"Dijital ikiz: {DIGITAL_TWIN_HISTORICAL_HEATS} historical ile başlar, "
-                f"veri geldikçe {DIGITAL_TWIN_TARGET_HEATS} hedefe kadar öğrenir."
-            )
-            if current_rows < DIGITAL_TWIN_MIN_START:
-                st.warning(f"Dijital ikiz için en az {DIGITAL_TWIN_MIN_START} şarj gerekiyor; şu an {current_rows} var.")
-            else:
-                if current_rows > int(st.session_state.model_last_trained_rows_marker):
-                    train_arc_model(df, note="(Dijital İkiz)", min_samples=DIGITAL_TWIN_MIN_START, silent=True)
-
-                if current_rows < DIGITAL_TWIN_TARGET_HEATS:
-                    st.session_state.model_status = (
-                        f"Dijital ikiz öğrenme aşamasında "
-                        f"(%{progress_ratio*100:.1f} – {current_rows}/{DIGITAL_TWIN_TARGET_HEATS})"
-                    )
-                else:
-                    st.session_state.model_status = "Dijital ikiz hazır ✅ (10.000 şarj ile eğitildi)"
-
-        st.write(f"**Durum:** {st.session_state.model_status}")
-        if st.session_state.model_last_train_time:
-            st.caption(
-                f"Son eğitim: {st.session_state.model_last_train_time} · "
-                f"Veri sayısı: {st.session_state.model_last_train_rows} · "
-                f"Toplam eğitim: {st.session_state.model_train_count}"
-            )
-
-    st.markdown("---")
-    st.markdown("### 🧪 What-if Simülasyonu (Arc Optimizer)")
-
-    model, feat_cols, target_cols = load_arc_model()
-    if model is None or feat_cols is None:
-        st.info("What-if için önce modeli eğitin (en az ~20 şarj).")
-    else:
-        last_row = df.iloc[-1]
-
-        def num_input(name, col, min_v, max_v, step, fmt="%.1f"):
-            raw = last_row.get(col, (min_v + max_v) / 2)
+# =========================================================
+# HSE Vision (Demo) - SADE UI
+# =========================================================
+def _load_repo_demo_video():
+    for p in HSE_DEMO_VIDEO_CANDIDATES:
+        if os.path.exists(p) and os.path.isfile(p):
             try:
-                v = float(raw)
+                with open(p, "rb") as f:
+                    b = f.read()
+                ext = os.path.splitext(p)[1].lower()
+                mime = "video/mp4"
+                if ext == ".mov":
+                    mime = "video/quicktime"
+                elif ext == ".m4v":
+                    mime = "video/mp4"
+                st.session_state.hse_video_bytes = b
+                st.session_state.hse_video_mime = mime
+                st.session_state.hse_video_name = os.path.basename(p)
+                return True
             except Exception:
-                v = float((min_v + max_v) / 2)
-            v = max(min_v, min(v, max_v))
-            return st.number_input(name, min_v, max_v, v, step=step, format=fmt, key=f"whatif_{col}")
-
-        w1, w2 = st.columns(2)
-        with w1:
-            tap_weight = num_input("Tap Weight (t)", "tap_weight_t", 20.0, 60.0, 0.5)
-            duration = num_input("Süre (dk)", "duration_min", 30.0, 90.0, 1.0, "%.0f")
-            energy = num_input("Enerji (kWh)", "energy_kwh", 500.0, 30000.0, 50.0)
-            o2_flow = num_input("O2 (Nm³/h)", "o2_flow_nm3h", 300.0, 3000.0, 10.0)
-        with w2:
-            slag = num_input("Slag Foaming (0–10)", "slag_foaming_index", 0.0, 10.0, 0.5)
-            panel_dT = num_input("Panel ΔT (°C)", "panel_delta_t_c", 0.0, 60.0, 0.5)
-            elec = num_input("Elektrot (kg/şarj)", "electrode_kg_per_heat", 0.5, 6.0, 0.05)
-
-        if st.button("Simülasyonu Çalıştır", key="btn_run_whatif"):
-            inp = {
-                "tap_weight_t": tap_weight,
-                "duration_min": duration,
-                "energy_kwh": energy,
-                "o2_flow_nm3h": o2_flow,
-                "slag_foaming_index": slag,
-                "panel_delta_t_c": panel_dT,
-                "electrode_kg_per_heat": elec,
-            }
-            row_df = pd.DataFrame([inp])[feat_cols].fillna(0.0)
-            try:
-                preds = model.predict(row_df)[0]
-                pred_dict = dict(zip(target_cols, preds))
-                kwh_pred = float(pred_dict.get("kwh_per_t", float("nan")))
-                tap_pred = float(pred_dict.get("tap_temp_c", float("nan")))
-                r1, r2 = st.columns(2)
-                r1.metric("AI kWh/t", f"{kwh_pred:.1f}" if np.isfinite(kwh_pred) else "-")
-                r2.metric("AI Tap T", f"{tap_pred:.0f} °C" if np.isfinite(tap_pred) else "-")
-            except Exception as e:
-                st.error(f"Tahmin hatası: {e}")
+                return False
+    return False
 
 
-# =========================================================
-# HSE Vision (Demo) – video repo içinden otomatik oynar, siren yok
-# =========================================================
-def _read_local_video_as_base64(path: str) -> tuple[Optional[str], Optional[str]]:
-    """
-    Returns (base64_str, mime) if file exists, else (None, None)
-    """
-    if not path or not os.path.exists(path):
-        return None, None
-    try:
-        with open(path, "rb") as f:
-            b = f.read()
-        return base64.b64encode(b).decode("utf-8"), HSE_DEMO_VIDEO_MIME
-    except Exception:
-        return None, None
+def _render_video(video_bytes: bytes, mime: str):
+    b64 = base64.b64encode(video_bytes).decode("utf-8")
+    components.html(
+        f"""
+        <div style="position:relative; width:100%; border-radius:14px; overflow:hidden; background:#000;">
+          <video autoplay loop controls playsinline
+                 style="width:100%; display:block; background:#000;">
+            <source src="data:{mime};base64,{b64}" type="{mime}">
+          </video>
+        </div>
+        """,
+        height=520,
+    )
 
 
 def show_hse_vision_demo_page(sim_mode: bool):
+    # ✅ Sade başlık (alt açıklama yok)
     st.markdown("## 🦺 HSE Vision (Demo) – Kamera & Risk Değerlendirme")
-    st.caption("Pilot demo – görüntü + risk skoru + kısa vadeli trend (PoC). (Not: siren uygulama içinden kaldırıldı; video kendi sesiyle oynar.)")
 
-    # ---- sadece bbox ayarı (siren kaldırıldı)
-    st.markdown("### ⚙️ Demo Ayarları")
-    st.session_state.hse_bbox_demo_enabled = st.toggle(
-        "Bounding Box overlay",
-        value=bool(st.session_state.get("hse_bbox_demo_enabled", True)),
-        help="Video üzerinde hareketli kutu (demo amaçlı).",
-        key="hse_bbox_demo_enabled_widget",
-    )
-
-    st.markdown("---")
-    st.markdown("### 🎥 Kamera / Görüntü (Repo’dan otomatik)")
-
-    b64, mime = _read_local_video_as_base64(HSE_DEMO_VIDEO_PATH)
-    if b64 is None:
-        st.warning(
-            f"Demo video bulunamadı: **{HSE_DEMO_VIDEO_PATH}**\n\n"
-            "GitHub projesine videoyu bu path ile ekle. Örn:\n"
-            "- assets/hse_demo.mp4"
-        )
-
+    # ✅ Sadece Risk Tipi seçimi (default: Baretsiz giriş)
     RISK_TYPES = [
+        "Baretsiz giriş",
         "SLAG / SPLASH",
         "Yük altında çalışma",
         "Sabitlenmemiş yük / düşen parça",
-        "Baretsiz giriş",
         "Yetkisiz riskli bölgeye giriş",
         "Sıcak yüzey / yanık riski",
         "Forklift–yaya yakınlaşma",
         "LOTO / enerji izolasyonu ihlali",
     ]
 
-    st.markdown("### 👷 Davranış & PPE (Demo Kontrolleri)")
-    c0, c1, c2, c3 = st.columns([1.5, 1, 1, 1])
-    with c0:
-        risk_tipi = st.selectbox("Risk tipi", RISK_TYPES, index=0)
-    with c1:
-        kisi_yaklasiyor = st.toggle("Kişi yaklaşıyor", value=True)
-    with c2:
-        kisi_bolgede = st.toggle("Kişi riskli bölgede", value=True)
-    with c3:
-        baret_yok = st.toggle("Baret yok", value=False)
+    default_idx = 0  # Baretsiz giriş
+    risk_tipi = st.selectbox("Risk tipi", RISK_TYPES, index=default_idx, key="hse_risk_type")
 
+    # ✅ Repo videosu otomatik
+    _load_repo_demo_video()
+    has_video = bool(st.session_state.get("hse_video_bytes"))
+
+    # Skor modeli (toggle yok, sade)
     type_weight = {
+        "Baretsiz giriş": 28,
         "SLAG / SPLASH": 25,
         "Yük altında çalışma": 30,
         "Sabitlenmemiş yük / düşen parça": 28,
-        "Baretsiz giriş": 18,
         "Yetkisiz riskli bölgeye giriş": 22,
         "Sıcak yüzey / yanık riski": 20,
         "Forklift–yaya yakınlaşma": 28,
         "LOTO / enerji izolasyonu ihlali": 26,
     }.get(risk_tipi, 20)
 
-    score = 10 + type_weight
-    if kisi_yaklasiyor:
-        score += 15
-    if kisi_bolgede:
-        score += 35
-    if baret_yok:
-        score += 20
-    score = int(max(0, min(100, score)))
-
+    # Sade senaryo: risk tipine göre deterministik bir skor
+    base = 50
+    score = int(max(0, min(100, base + type_weight)))
     olasilik = int(max(1, min(99, round(score * 0.9))))
-
-    if kisi_bolgede:
-        tmin, tmax = (45, 90)
-    elif kisi_yaklasiyor:
-        tmin, tmax = (90, 150)
-    else:
-        tmin, tmax = (120, 200)
-
-    critical_threshold = 75
-    kritik = score >= critical_threshold
 
     if score >= 75:
         durum = "🔴 KRİTİK"
-        sorun_metni = (
-            f"{risk_tipi} riski yüksek.\n"
-            f"Genel HSE skor: {score}/100.\n"
-            "Personel riskli alanda / yakınında.\n"
-            "Derhal alanın boşaltılması + bariyer kontrolü önerilir."
-        )
+        tmin, tmax = (45, 90)
+        alarm = True
     elif score >= 50:
         durum = "🟡 DİKKAT"
-        sorun_metni = (
-            f"Olası risk: {risk_tipi}.\n"
-            f"Genel HSE skor: {score}/100.\n"
-            "Yaklaşım / PPE uygunsuzluğu izleniyor."
-        )
+        tmin, tmax = (90, 150)
+        alarm = False
     else:
         durum = "🟢 NORMAL"
-        sorun_metni = None
+        tmin, tmax = (120, 200)
+        alarm = False
 
-    # ---- mini trend (aktüel + AI)
     horizon_min = 15
     now = datetime.now(TZ)
 
-    if kisi_bolgede:
-        drift = +2.4
-    elif kisi_yaklasiyor or baret_yok:
-        drift = +1.2
-    else:
-        drift = -1.8
+    # AI trend drift (risk tipine göre)
+    drift = +2.0 if alarm else (+0.6 if score >= 50 else -1.2)
 
     actual_points = []
     for i in range(6, -1, -1):
         t = now - timedelta(minutes=i)
-        v = score - int(0.6 * i) + (1 if (i % 3 == 0) else 0)
+        v = score - int(0.6 * i)
         v = int(max(0, min(100, v)))
         actual_points.append({"ts": t, "risk": v, "type": "Aktüel"})
 
@@ -1405,6 +1306,7 @@ def show_hse_vision_demo_page(sim_mode: bool):
 
     risk_df = pd.DataFrame(actual_points + future_points)
 
+    critical_threshold = 75
     crit_time = None
     for row in future_points:
         if row["risk"] >= critical_threshold:
@@ -1413,122 +1315,34 @@ def show_hse_vision_demo_page(sim_mode: bool):
 
     left, right = st.columns([2.2, 1.3])
 
-    # bbox rengi: ihlal = kırmızı (baretsiz), ok = yeşil
-    violation_for_bbox = bool(baret_yok)
-    bbox_color = "#ff2d2d" if violation_for_bbox else "#3ddc84"
-
-    overlay_js = f"""
-    <style>
-      .hse-wrap {{
-        position: relative;
-        width: 100%;
-        height: 520px;
-        border-radius: 14px;
-        overflow: hidden;
-        background: #000;
-      }}
-      .hse-media {{
-        position:absolute;
-        inset:0;
-        width:100%;
-        height:100%;
-        object-fit: cover;
-      }}
-      .hse-bbox {{
-        position:absolute;
-        border: 4px solid {bbox_color};
-        border-radius: 10px;
-        box-shadow: 0 0 0 2px rgba(0,0,0,0.35);
-        width: 180px;
-        height: 280px;
-        left: 10%;
-        top: 18%;
-        transition: border-color 120ms linear;
-        pointer-events: none;
-      }}
-      .hse-tag {{
-        position:absolute;
-        left: 12px;
-        top: 12px;
-        padding: 6px 10px;
-        border-radius: 999px;
-        background: rgba(0,0,0,0.55);
-        color: white;
-        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto;
-        font-size: 13px;
-        font-weight: 800;
-        letter-spacing: 0.2px;
-      }}
-      .hse-tag span {{
-        color: {bbox_color};
-      }}
-    </style>
-    <script>
-      (function(){{
-        const enabled = {str(bool(st.session_state.get("hse_bbox_demo_enabled", True))).lower()};
-        if (!enabled) return;
-
-        const box = document.getElementById("hse_bbox");
-        if (!box) return;
-
-        // hareket: sinüs ile sağ-sol + hafif yukarı-aşağı
-        let t = 0;
-        if (window.__hse_bbox_timer) clearInterval(window.__hse_bbox_timer);
-        window.__hse_bbox_timer = setInterval(() => {{
-          t += 0.06;
-          const x = 8 + 12 * (Math.sin(t) * 0.5 + 0.5);   // 8%..20%
-          const y = 14 + 10 * (Math.sin(t*0.7) * 0.5 + 0.5); // 14%..24%
-          const w = 170 + 20 * (Math.sin(t*0.9) * 0.5 + 0.5); // 170..190
-          const h = 270 + 25 * (Math.sin(t*0.6) * 0.5 + 0.5); // 270..295
-          box.style.left = x + "%";
-          box.style.top = y + "%";
-          box.style.width = w + "px";
-          box.style.height = h + "px";
-        }}, 60);
-      }})();
-    </script>
-    """
-
     with left:
-        if b64 is not None:
-            # ✅ Video otomatik repo içinden gelir, ses video'nun kendi sesi (muted değil)
-            # Not: autoplay bazı tarayıcılarda sesli başlamayı engelleyebilir; kullanıcı play'e basınca ses gelir.
-            components.html(
-                f"""
-                <div class="hse-wrap">
-                  <video class="hse-media" autoplay loop controls playsinline>
-                    <source src="data:{mime};base64,{b64}" type="{mime}">
-                  </video>
-
-                  <div class="hse-tag">PPE: <span>{'BARETSİZ' if baret_yok else 'OK'}</span></div>
-                  <div id="hse_bbox" class="hse-bbox" style="display:{'block' if st.session_state.get('hse_bbox_demo_enabled', True) else 'none'};"></div>
-                </div>
-                {overlay_js}
-                """,
-                height=520,
-            )
+        if has_video:
+            mime = st.session_state.get("hse_video_mime") or "video/mp4"
+            vb = st.session_state.get("hse_video_bytes")
+            _render_video(vb, mime)
         else:
             components.html(
-                f"""
-                <div class="hse-wrap" style="background: linear-gradient(135deg, #111, #333);">
-                  <div style="
-                      position:absolute; inset:0;
-                      display:flex; align-items:center; justify-content:center;
-                      color:#fff; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto;
-                      text-align:center; padding:24px;
-                  ">
-                    <div>
-                      <div style="font-size:20px; font-weight:800; margin-bottom:8px;">📷 Demo video yok</div>
-                      <div style="opacity:0.85; font-size:14px; line-height:1.4;">
-                        assets/hse_demo.mp4 dosyasını ekleyince burada otomatik oynar.
-                      </div>
+                """
+                <div style="
+                    width:100%;
+                    height:520px;
+                    border-radius:14px;
+                    background: linear-gradient(135deg, #111, #333);
+                    display:flex;
+                    align-items:center;
+                    justify-content:center;
+                    color:#fff;
+                    font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto;
+                    text-align:center;
+                    padding:24px;
+                ">
+                  <div>
+                    <div style="font-size:18px; font-weight:800; margin-bottom:8px;">📷 Video yok</div>
+                    <div style="opacity:0.85; font-size:14px; line-height:1.4;">
+                      Repo içine <b>assets/hse_demo.mp4</b> koyunca otomatik oynar.
                     </div>
                   </div>
-
-                  <div class="hse-tag">PPE: <span>{'BARETSİZ' if baret_yok else 'OK'}</span></div>
-                  <div id="hse_bbox" class="hse-bbox" style="display:{'block' if st.session_state.get('hse_bbox_demo_enabled', True) else 'none'};"></div>
                 </div>
-                {overlay_js}
                 """,
                 height=520,
             )
@@ -1536,14 +1350,13 @@ def show_hse_vision_demo_page(sim_mode: bool):
     with right:
         st.markdown("### 🧠 Genel HSE Risk Skoru")
         st.metric("Risk Skoru (0–100)", f"{score}")
-        st.caption("Aktüel (son dakikalar) + AI tahmini (şimdiden sonra)")
 
         ch = (
             alt.Chart(risk_df)
             .mark_line()
             .encode(
-                x=alt.X("ts:T", title="Zaman", axis=alt.Axis(format="%H:%M", labelAngle=-25)),
-                y=alt.Y("risk:Q", title="Risk Skoru", scale=alt.Scale(domain=[0, 100])),
+                x=alt.X("ts:T", title="", axis=alt.Axis(format="%H:%M", labelAngle=-25)),
+                y=alt.Y("risk:Q", title="", scale=alt.Scale(domain=[0, 100])),
                 strokeDash=alt.StrokeDash(
                     "type:N",
                     title=None,
@@ -1572,11 +1385,12 @@ def show_hse_vision_demo_page(sim_mode: bool):
             {"Parametre": "Durum", "Değer": durum},
         ])
 
-    st.markdown("---")
-    if sorun_metni:
-        st.error(f"⚠️ **TESPİT EDİLEN SORUN**\n\n{sorun_metni}")
+    if alarm:
+        st.error(f"⚠️ {risk_tipi} — KRİTİK RİSK")
+    elif score >= 50:
+        st.warning(f"{risk_tipi} — DİKKAT")
     else:
-        st.success("✅ Aktif bir güvenlik riski tespit edilmedi.")
+        st.success("✅ Normal")
 
 
 # =========================================================
@@ -1614,8 +1428,8 @@ def sidebar_controls():
 
         batch = st.slider("Batch (şarj/adım)", 1, 500, SIM_STREAM_BATCH_DEFAULT, 1, key="sidebar_batch")
 
-        st.toggle("9000 şarjı zamanla oku", value=bool(st.session_state.get("sim_stream_enabled", True)), key="sim_stream_enabled")
-        st.toggle("Otomatik ilerlet", value=bool(st.session_state.get("sim_stream_autostep", True)), key="sim_stream_autostep")
+        bind_toggle("9000 şarjı zamanla oku", "sim_stream_enabled", "sb_sim_stream_enabled")
+        bind_toggle("Otomatik ilerlet", "sim_stream_autostep", "sb_sim_stream_autostep")
 
         c1, c2 = st.columns(2)
         with c1:
