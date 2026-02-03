@@ -537,7 +537,8 @@ def build_24h_actual_vs_ai_chart(
 
     base_kwh = safe_mean(tail50["kwh_per_t"], safe_mean(df_24["kwh_per_t"], 420.0)) if "kwh_per_t" in df.columns else 420.0
     base_elec = safe_mean(tail50["electrode_kg_per_t"], safe_mean(df_24["electrode_kg_per_t"], 0.055)) if "electrode_kg_per_t" in df.columns else 0.055
-    base_tap = safe_mean(tail50["tap_temp_c"], safe_mean(df_24["tap_temp_c_attachment"], 1610.0)) if "tap_temp_c" in df.columns else 1610.0
+    base_tap = safe_mean(tail50["tap_temp_c"], safe_mean(df_24["tap_temp_c"], 1610.0)) if "tap_temp_c" in df.columns else 1610.0
+
 
     target_kwh = max(base_kwh - 5.0, 0.0)
     target_elec = max(base_elec - 0.002, 0.0)
