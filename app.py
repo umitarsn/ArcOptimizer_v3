@@ -1402,7 +1402,7 @@ def sidebar_controls():
     sim_mode = st.toggle(
         "Simülasyon Modu",
         value=True,
-        help="Açıkken sistem canlı veri yerine simülasyon veri kullanır.",
+        help="Açıkken sistem canlı veri yerine simülasyon veri kullanir.",
         key="sidebar_sim_mode",
     )
 
